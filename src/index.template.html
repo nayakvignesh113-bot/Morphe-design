@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Morphe Design Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* Layout idea: drawing-board canvas is the hero; setup on the left, generated family of parts below, then the chosen part's numbers. */
+  --bg: #e9edf1;
+  --panel: #f7f9fb;
+  --paper: #ffffff;
+  --ink: #12171c;
+  --muted: #5a6672;
+  --line: #d2d9e1;
+  --grid: #eef1f5;
+  --accent: #1d4ed8;
+  --accent-soft: #dbe5fd;
+  --load: #d9441a;
+  --ok: #16794d;
+  --warn: #a8670f;
+  --bad: #be2b2b;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1115; --panel: #161a20; --paper: #1b2027; --ink: #e5e9ee; --muted: #98a3af; --line: #2b323b;
+    --grid: #222830; --accent: #7b9bff; --accent-soft: #23305a; --load: #ff7b4f; --ok: #4cc38a; --warn: #e2a443; --bad: #ff6b6b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1115; --panel: #161a20; --paper: #1b2027; --ink: #e5e9ee; --muted: #98a3af; --line: #2b323b;
+  --grid: #222830; --accent: #7b9bff; --accent-soft: #23305a; --load: #ff7b4f; --ok: #4cc38a; --warn: #e2a443; --bad: #ff6b6b;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font-body); }
+button, input, select { font: inherit; color: inherit; }
+h1, h2, h3 { font-family: var(--font-display); margin: 0; text-wrap: balance; }
+.num, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+header.top { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; padding: 14px 20px 10px; border-bottom: 1px solid var(--line); }
+header.top h1 { font-size: 22px; letter-spacing: .02em; }
+header.top h1 span { color: var(--accent); }
+header.top p { margin: 0; color: var(--muted); }
+
+.layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; padding: 16px 20px 40px; max-width: 1500px; margin: 0 auto; }
+@media (max-width: 900px) { .layout { grid-template-columns: 1fr; padding: 12px 16px 40px; } }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+aside.setup { padding: 14px; display: flex; flex-direction: column; gap: 14px; align-self: start; }
+aside.setup h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.group { display: flex; flex-direction: column; gap: 8px; }
+.field { display: grid; grid-template-columns: 1fr 112px; align-items: center; gap: 8px; }
+.field label { color: var(--muted); font-size: 13px; }
+.field input, .field select, .wide select { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); }
+.wide { display: flex; flex-direction: column; gap: 4px; }
+.wide label { color: var(--muted); font-size: 13px; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.hint { color: var(--muted); font-size: 12px; margin: 0; }
+input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.btn { border: 1px solid var(--line); background: var(--paper); border-radius: 7px; padding: 7px 12px; cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; padding: 10px 14px; font-size: 15px; }
+:root[data-theme="dark"] .btn.primary { color: #0e1115; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .btn.primary { color: #0e1115; } }
+.btn.primary.stale { box-shadow: 0 0 0 3px var(--accent-soft); }
+.btn:disabled { opacity: .5; cursor: default; }
+
+main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.board { padding: 10px 12px 12px; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--paper); }
+.seg button { border: 0; background: transparent; padding: 6px 10px; cursor: pointer; font-size: 13px; border-right: 1px solid var(--line); }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.toolbar select { padding: 5px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); font-size: 13px; }
+.toolbar .spacer { flex: 1; }
+#stage { width: 100%; display: block; touch-action: none; cursor: crosshair; border-radius: 6px; }
+.tiphint { color: var(--muted); font-size: 12px; margin: 6px 2px 0; }
+.banner { display: none; margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: var(--accent-soft); color: var(--ink); font-size: 13px; }
+.banner.show { display: block; }
+.banner.err { background: color-mix(in srgb, var(--bad) 16%, transparent); }
+
+.feats { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.feat { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); }
+.feat .tag { font-family: var(--font-display); font-weight: 600; min-width: 74px; }
+.feat .tag.load { color: var(--load); } .feat .tag.sup { color: var(--accent); }
+.feat input { width: 84px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); }
+.feat select { padding: 3px 4px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); }
+.feat .x { margin-left: auto; border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 6px; }
+.feat .x:hover { color: var(--bad); }
+
+.summary { padding: 14px 16px; display: grid; gap: 4px; }
+.summary .verdict { font-family: var(--font-display); font-size: 20px; font-weight: 600; }
+.summary .sub { color: var(--muted); }
+.progress { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; margin-top: 6px; }
+.progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+
+.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 10px; }
+.card { border: 1px solid var(--line); border-radius: 9px; background: var(--paper); padding: 8px; cursor: pointer; display: flex; flex-direction: column; gap: 6px; text-align: left; position: relative; }
+.card:hover { border-color: var(--muted); }
+.card[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.card canvas { width: 100%; display: block; border-radius: 4px; background: var(--panel); }
+.card .head { display: flex; align-items: baseline; gap: 6px; }
+.card .letter { font-family: var(--font-display); font-weight: 700; font-size: 18px; }
+.card .name { color: var(--muted); font-size: 12px; }
+.card .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; font-size: 12px; }
+.card .stats b { font-family: var(--font-mono); font-weight: 500; }
+.chip { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 99px; }
+.chip.ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.chip.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.chip.bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
+.chip.rec { background: var(--accent); color: var(--paper); }
+.card .chips { display: flex; gap: 4px; flex-wrap: wrap; min-height: 18px; }
+.card .bar { height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.card .bar i { display: block; height: 100%; background: var(--accent); width: 0; }
+
+.detail { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 16px; padding: 14px 16px; }
+@media (max-width: 1100px) { .detail { grid-template-columns: 1fr; } }
+.detail h3 { font-size: 16px; margin-bottom: 8px; }
+table.metrics { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.metrics td { padding: 5px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.metrics td:first-child { color: var(--muted); }
+table.metrics td:last-child { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.exports { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+#pareto { width: 100%; height: auto; display: block; }
+.legend { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-top: 6px; flex-wrap: wrap; }
+.legend canvas { height: 10px; width: 160px; border-radius: 2px; }
+.notes { font-size: 12px; color: var(--muted); padding: 12px 16px; }
+.notes ul { margin: 6px 0 0; padding-left: 18px; }
+.toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--ink); color: var(--paper); padding: 8px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 9; }
+.toast.show { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>Morphe <span>Design Studio</span></h1>
+  <p>Draw the supports and loads. Get a family of optimized plate parts sized to your factor of safety, ready to cut.</p>
+</header>
+
+<div class="layout">
+  <aside class="setup panel" aria-label="Problem setup">
+    <div class="group">
+      <h2>Start from</h2>
+      <div class="wide"><label for="preset">Load case template</label>
+        <select id="preset">
+          <option value="cantilever">Cantilever bracket</option>
+          <option value="beam">Simply supported beam</option>
+          <option value="lbracket">L-bracket</option>
+          <option value="shelf">Wall shelf bracket</option>
+          <option value="blank">Blank plate</option>
+        </select></div>
+    </div>
+    <div class="group">
+      <h2>Design space</h2>
+      <div class="field"><label for="W">Width (mm)</label><input id="W" type="number" min="10" step="5"></div>
+      <div class="field"><label for="H">Height (mm)</label><input id="H" type="number" min="10" step="5"></div>
+      <div class="field"><label for="res">Mesh</label>
+        <select id="res"><option value="draft">Draft · fast</option><option value="std">Standard</option><option value="fine">Fine · slow</option></select></div>
+      <label class="check"><input id="sym" type="checkbox"> Mirror-symmetric about the vertical centre line</label>
+    </div>
+    <div class="group">
+      <h2>Material and process</h2>
+      <div class="wide"><label for="mat">Material</label><select id="mat"></select></div>
+      <div class="wide"><label for="proc">Manufacturing</label><select id="proc"></select></div>
+      <div class="field"><label for="minw">Min member width (mm)</label><input id="minw" type="number" min="0.5" step="0.5"></div>
+    </div>
+    <div class="group">
+      <h2>Requirements</h2>
+      <div class="field"><label for="fos">Factor of safety on yield</label><input id="fos" type="number" min="1" step="0.1"></div>
+      <div class="field"><label for="dlim">Max deflection (mm, 0 = no limit)</label><input id="dlim" type="number" min="0" step="0.05"></div>
+      <label class="check"><input id="autot" type="checkbox"> Size plate thickness to a standard gauge</label>
+      <div class="field"><label for="tfix">Plate thickness (mm)</label><input id="tfix" type="number" min="0.5" step="0.5"></div>
+      <p class="hint" id="thint">Thickness is picked per design so each one just meets the requirements.</p>
+    </div>
+    <button class="btn primary" id="go">Generate designs</button>
+    <p class="hint" id="runinfo"></p>
+  </aside>
+
+  <main>
+    <section class="board panel" aria-label="Drawing board">
+      <div class="toolbar" role="toolbar" aria-label="Editing tools">
+        <div class="seg" id="tools">
+          <button data-tool="support" aria-pressed="false">Support</button>
+          <button data-tool="load" aria-pressed="false">Load</button>
+          <button data-tool="void" aria-pressed="false">Keep-out</button>
+          <button data-tool="solid" aria-pressed="false">Keep-solid</button>
+          <button data-tool="erase" aria-pressed="false">Erase</button>
+        </div>
+        <select id="suptype" aria-label="Support type">
+          <option value="xy">Fixed (bolted)</option>
+          <option value="y">Slides horizontally</option>
+          <option value="x">Slides vertically</option>
+        </select>
+        <select id="voidshape" aria-label="Keep-out shape"><option value="rect">Rectangle</option><option value="circle">Circle</option></select>
+        <span class="spacer"></span>
+        <div class="seg" id="views" aria-label="Result view">
+          <button data-view="shape" aria-pressed="true">Shape</button>
+          <button data-view="stress" aria-pressed="false">Stress</button>
+          <button data-view="deform" aria-pressed="false">Deflection</button>
+          <button data-view="thin" aria-pressed="false">Thin webs</button>
+        </div>
+      </div>
+      <canvas id="stage" aria-label="Design space with supports, loads and the selected design"></canvas>
+      <div class="legend" id="legend"></div>
+      <p class="tiphint" id="tip"></p>
+      <div class="banner" id="banner"></div>
+      <div class="feats" id="feats"></div>
+    </section>
+
+    <section class="summary panel" aria-live="polite">
+      <div class="verdict" id="verdict">Generating the first family of designs…</div>
+      <div class="sub" id="verdictSub"></div>
+      <div class="progress"><i id="prog"></i></div>
+    </section>
+
+    <section class="gallery" id="gallery" aria-label="Generated designs"></section>
+
+    <section class="detail panel">
+      <div>
+        <h3 id="dtitle">Selected design</h3>
+        <table class="metrics"><tbody id="metrics"></tbody></table>
+        <div class="exports">
+          <button class="btn" id="exZip">Download CAD pack (.zip: DXF, SVG, report)</button>
+          <button class="btn" id="exSvg">SVG</button>
+          <button class="btn" id="exCsv">CSV of all designs</button>
+          <button class="btn" id="exPng">PNG</button>
+          <button class="btn" id="exCopy">Copy DXF text</button>
+        </div>
+      </div>
+      <div>
+        <h3>Mass against deflection, each design sized to your requirements</h3>
+        <svg id="pareto" viewBox="0 0 420 260" role="img" aria-label="Scatter of mass versus deflection"></svg>
+      </div>
+    </section>
+
+    <section class="notes panel">
+      <strong>What the numbers mean.</strong>
+      <ul>
+        <li>2D plane-stress, linear-elastic, static analysis of a plate of uniform thickness. Stress is element-centroid von Mises; elements touching a point load are excluded from the peak because a point load has no finite stress. Your fastener detail sets that local stress.</li>
+        <li>Thickness is solved exactly: stress scales with 1/t and deflection with 1/(E·t), then rounded up to the next standard plate gauge.</li>
+        <li>Not checked: buckling of slender compression members, out-of-plane loads, fatigue, contact at bolt holes. Before release, rerun the exported geometry in your FEA package.</li>
+        <li>Solver verified against the published 88-line topology code (identical compliance history) and Timoshenko beam theory (tip deflection within 0.1%).</li>
+      </ul>
+    </section>
+  </main>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script id="worker-src" type="text/plain">
+/*CORE*/
+self.onmessage = (m) => {
+  const j = m.data;
+  try {
+    if (j.kind === 'opt') {
+      let last = 0;
+      const res = optimize(j, (it, c, vol, beta, xP) => {
+        const now = Date.now();
+        if (now - last > 60 || it === 1) { last = now; self.postMessage({ type: 'iter', jobId: j.jobId, runId: j.runId, it, beta, vol, x: Float32Array.from(xP) }); }
+      });
+      const ev = evaluate(j, res.xPhys, j.h);
+      self.postMessage({ type: 'done', jobId: j.jobId, runId: j.runId, it: res.it, x: Float32Array.from(res.xPhys), ev });
+    } else {
+      const field = new Float64Array(j.nelx * j.nely).fill(1);
+      const ev = evaluate(j, field, j.h);
+      self.postMessage({ type: 'done', jobId: j.jobId, runId: j.runId, it: 0, x: new Float32Array(field), ev });
+    }
+  } catch (err) { self.postMessage({ type: 'error', jobId: j.jobId, runId: j.runId, message: String(err && err.message || err) }); }
+};
+</script>
+
+<script>
+/*APP*/
+</script>
+</body>
+</html>

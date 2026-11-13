@@ -1,0 +1,1341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Morphe Design Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* Layout idea: drawing-board canvas is the hero; setup on the left, generated family of parts below, then the chosen part's numbers. */
+  --bg: #e9edf1;
+  --panel: #f7f9fb;
+  --paper: #ffffff;
+  --ink: #12171c;
+  --muted: #5a6672;
+  --line: #d2d9e1;
+  --grid: #eef1f5;
+  --accent: #1d4ed8;
+  --accent-soft: #dbe5fd;
+  --load: #d9441a;
+  --ok: #16794d;
+  --warn: #a8670f;
+  --bad: #be2b2b;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1115; --panel: #161a20; --paper: #1b2027; --ink: #e5e9ee; --muted: #98a3af; --line: #2b323b;
+    --grid: #222830; --accent: #7b9bff; --accent-soft: #23305a; --load: #ff7b4f; --ok: #4cc38a; --warn: #e2a443; --bad: #ff6b6b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1115; --panel: #161a20; --paper: #1b2027; --ink: #e5e9ee; --muted: #98a3af; --line: #2b323b;
+  --grid: #222830; --accent: #7b9bff; --accent-soft: #23305a; --load: #ff7b4f; --ok: #4cc38a; --warn: #e2a443; --bad: #ff6b6b;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font-body); }
+button, input, select { font: inherit; color: inherit; }
+h1, h2, h3 { font-family: var(--font-display); margin: 0; text-wrap: balance; }
+.num, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+header.top { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; padding: 14px 20px 10px; border-bottom: 1px solid var(--line); }
+header.top h1 { font-size: 22px; letter-spacing: .02em; }
+header.top h1 span { color: var(--accent); }
+header.top p { margin: 0; color: var(--muted); }
+
+.layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; padding: 16px 20px 40px; max-width: 1500px; margin: 0 auto; }
+@media (max-width: 900px) { .layout { grid-template-columns: 1fr; padding: 12px 16px 40px; } }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+aside.setup { padding: 14px; display: flex; flex-direction: column; gap: 14px; align-self: start; }
+aside.setup h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.group { display: flex; flex-direction: column; gap: 8px; }
+.field { display: grid; grid-template-columns: 1fr 112px; align-items: center; gap: 8px; }
+.field label { color: var(--muted); font-size: 13px; }
+.field input, .field select, .wide select { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); }
+.wide { display: flex; flex-direction: column; gap: 4px; }
+.wide label { color: var(--muted); font-size: 13px; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.hint { color: var(--muted); font-size: 12px; margin: 0; }
+input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.btn { border: 1px solid var(--line); background: var(--paper); border-radius: 7px; padding: 7px 12px; cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; padding: 10px 14px; font-size: 15px; }
+:root[data-theme="dark"] .btn.primary { color: #0e1115; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .btn.primary { color: #0e1115; } }
+.btn.primary.stale { box-shadow: 0 0 0 3px var(--accent-soft); }
+.btn:disabled { opacity: .5; cursor: default; }
+
+main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.board { padding: 10px 12px 12px; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--paper); }
+.seg button { border: 0; background: transparent; padding: 6px 10px; cursor: pointer; font-size: 13px; border-right: 1px solid var(--line); }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.toolbar select { padding: 5px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); font-size: 13px; }
+.toolbar .spacer { flex: 1; }
+#stage { width: 100%; display: block; touch-action: none; cursor: crosshair; border-radius: 6px; }
+.tiphint { color: var(--muted); font-size: 12px; margin: 6px 2px 0; }
+.banner { display: none; margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: var(--accent-soft); color: var(--ink); font-size: 13px; }
+.banner.show { display: block; }
+.banner.err { background: color-mix(in srgb, var(--bad) 16%, transparent); }
+
+.feats { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.feat { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); }
+.feat .tag { font-family: var(--font-display); font-weight: 600; min-width: 74px; }
+.feat .tag.load { color: var(--load); } .feat .tag.sup { color: var(--accent); }
+.feat input { width: 84px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); }
+.feat select { padding: 3px 4px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); }
+.feat .x { margin-left: auto; border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 6px; }
+.feat .x:hover { color: var(--bad); }
+
+.summary { padding: 14px 16px; display: grid; gap: 4px; }
+.summary .verdict { font-family: var(--font-display); font-size: 20px; font-weight: 600; }
+.summary .sub { color: var(--muted); }
+.progress { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; margin-top: 6px; }
+.progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+
+.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 10px; }
+.card { border: 1px solid var(--line); border-radius: 9px; background: var(--paper); padding: 8px; cursor: pointer; display: flex; flex-direction: column; gap: 6px; text-align: left; position: relative; }
+.card:hover { border-color: var(--muted); }
+.card[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.card canvas { width: 100%; display: block; border-radius: 4px; background: var(--panel); }
+.card .head { display: flex; align-items: baseline; gap: 6px; }
+.card .letter { font-family: var(--font-display); font-weight: 700; font-size: 18px; }
+.card .name { color: var(--muted); font-size: 12px; }
+.card .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; font-size: 12px; }
+.card .stats b { font-family: var(--font-mono); font-weight: 500; }
+.chip { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 99px; }
+.chip.ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.chip.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.chip.bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
+.chip.rec { background: var(--accent); color: var(--paper); }
+.card .chips { display: flex; gap: 4px; flex-wrap: wrap; min-height: 18px; }
+.card .bar { height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.card .bar i { display: block; height: 100%; background: var(--accent); width: 0; }
+
+.detail { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 16px; padding: 14px 16px; }
+@media (max-width: 1100px) { .detail { grid-template-columns: 1fr; } }
+.detail h3 { font-size: 16px; margin-bottom: 8px; }
+table.metrics { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.metrics td { padding: 5px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.metrics td:first-child { color: var(--muted); }
+table.metrics td:last-child { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.exports { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+#pareto { width: 100%; height: auto; display: block; }
+.legend { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-top: 6px; flex-wrap: wrap; }
+.legend canvas { height: 10px; width: 160px; border-radius: 2px; }
+.notes { font-size: 12px; color: var(--muted); padding: 12px 16px; }
+.notes ul { margin: 6px 0 0; padding-left: 18px; }
+.toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--ink); color: var(--paper); padding: 8px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 9; }
+.toast.show { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>Morphe <span>Design Studio</span></h1>
+  <p>Draw the supports and loads. Get a family of optimized plate parts sized to your factor of safety, ready to cut.</p>
+</header>
+
+<div class="layout">
+  <aside class="setup panel" aria-label="Problem setup">
+    <div class="group">
+      <h2>Start from</h2>
+      <div class="wide"><label for="preset">Load case template</label>
+        <select id="preset">
+          <option value="cantilever">Cantilever bracket</option>
+          <option value="beam">Simply supported beam</option>
+          <option value="lbracket">L-bracket</option>
+          <option value="shelf">Wall shelf bracket</option>
+          <option value="blank">Blank plate</option>
+        </select></div>
+    </div>
+    <div class="group">
+      <h2>Design space</h2>
+      <div class="field"><label for="W">Width (mm)</label><input id="W" type="number" min="10" step="5"></div>
+      <div class="field"><label for="H">Height (mm)</label><input id="H" type="number" min="10" step="5"></div>
+      <div class="field"><label for="res">Mesh</label>
+        <select id="res"><option value="draft">Draft · fast</option><option value="std">Standard</option><option value="fine">Fine · slow</option></select></div>
+      <label class="check"><input id="sym" type="checkbox"> Mirror-symmetric about the vertical centre line</label>
+    </div>
+    <div class="group">
+      <h2>Material and process</h2>
+      <div class="wide"><label for="mat">Material</label><select id="mat"></select></div>
+      <div class="wide"><label for="proc">Manufacturing</label><select id="proc"></select></div>
+      <div class="field"><label for="minw">Min member width (mm)</label><input id="minw" type="number" min="0.5" step="0.5"></div>
+    </div>
+    <div class="group">
+      <h2>Requirements</h2>
+      <div class="field"><label for="fos">Factor of safety on yield</label><input id="fos" type="number" min="1" step="0.1"></div>
+      <div class="field"><label for="dlim">Max deflection (mm, 0 = no limit)</label><input id="dlim" type="number" min="0" step="0.05"></div>
+      <label class="check"><input id="autot" type="checkbox"> Size plate thickness to a standard gauge</label>
+      <div class="field"><label for="tfix">Plate thickness (mm)</label><input id="tfix" type="number" min="0.5" step="0.5"></div>
+      <p class="hint" id="thint">Thickness is picked per design so each one just meets the requirements.</p>
+    </div>
+    <button class="btn primary" id="go">Generate designs</button>
+    <p class="hint" id="runinfo"></p>
+  </aside>
+
+  <main>
+    <section class="board panel" aria-label="Drawing board">
+      <div class="toolbar" role="toolbar" aria-label="Editing tools">
+        <div class="seg" id="tools">
+          <button data-tool="support" aria-pressed="false">Support</button>
+          <button data-tool="load" aria-pressed="false">Load</button>
+          <button data-tool="void" aria-pressed="false">Keep-out</button>
+          <button data-tool="solid" aria-pressed="false">Keep-solid</button>
+          <button data-tool="erase" aria-pressed="false">Erase</button>
+        </div>
+        <select id="suptype" aria-label="Support type">
+          <option value="xy">Fixed (bolted)</option>
+          <option value="y">Slides horizontally</option>
+          <option value="x">Slides vertically</option>
+        </select>
+        <select id="voidshape" aria-label="Keep-out shape"><option value="rect">Rectangle</option><option value="circle">Circle</option></select>
+        <span class="spacer"></span>
+        <div class="seg" id="views" aria-label="Result view">
+          <button data-view="shape" aria-pressed="true">Shape</button>
+          <button data-view="stress" aria-pressed="false">Stress</button>
+          <button data-view="deform" aria-pressed="false">Deflection</button>
+          <button data-view="thin" aria-pressed="false">Thin webs</button>
+        </div>
+      </div>
+      <canvas id="stage" aria-label="Design space with supports, loads and the selected design"></canvas>
+      <div class="legend" id="legend"></div>
+      <p class="tiphint" id="tip"></p>
+      <div class="banner" id="banner"></div>
+      <div class="feats" id="feats"></div>
+    </section>
+
+    <section class="summary panel" aria-live="polite">
+      <div class="verdict" id="verdict">Generating the first family of designs…</div>
+      <div class="sub" id="verdictSub"></div>
+      <div class="progress"><i id="prog"></i></div>
+    </section>
+
+    <section class="gallery" id="gallery" aria-label="Generated designs"></section>
+
+    <section class="detail panel">
+      <div>
+        <h3 id="dtitle">Selected design</h3>
+        <table class="metrics"><tbody id="metrics"></tbody></table>
+        <div class="exports">
+          <button class="btn" id="exZip">Download CAD pack (.zip: DXF, SVG, report)</button>
+          <button class="btn" id="exSvg">SVG</button>
+          <button class="btn" id="exCsv">CSV of all designs</button>
+          <button class="btn" id="exPng">PNG</button>
+          <button class="btn" id="exCopy">Copy DXF text</button>
+        </div>
+      </div>
+      <div>
+        <h3>Mass against deflection, each design sized to your requirements</h3>
+        <svg id="pareto" viewBox="0 0 420 260" role="img" aria-label="Scatter of mass versus deflection"></svg>
+      </div>
+    </section>
+
+    <section class="notes panel">
+      <strong>What the numbers mean.</strong>
+      <ul>
+        <li>2D plane-stress, linear-elastic, static analysis of a plate of uniform thickness. Stress is element-centroid von Mises; elements touching a point load are excluded from the peak because a point load has no finite stress. Your fastener detail sets that local stress.</li>
+        <li>Thickness is solved exactly: stress scales with 1/t and deflection with 1/(E·t), then rounded up to the next standard plate gauge.</li>
+        <li>Not checked: buckling of slender compression members, out-of-plane loads, fatigue, contact at bolt holes. Before release, rerun the exported geometry in your FEA package.</li>
+        <li>Solver verified against the published 88-line topology code (identical compliance history) and Timoshenko beam theory (tip deflection within 0.1%).</li>
+      </ul>
+    </section>
+  </main>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script id="worker-src" type="text/plain">
+// Morphe core: 2D plane-stress FEA + SIMP topology optimization (density filter + Heaviside projection)
+// Shared by the Web Worker and the Node validation harness. Units: N, mm, MPa.
+
+function makeKE(nu) {
+  const k = [1/2 - nu/6, 1/8 + nu/8, -1/4 - nu/12, -1/8 + 3*nu/8,
+             -1/4 + nu/12, -1/8 - nu/8, nu/6, 1/8 - 3*nu/8];
+  const c = 1 / (1 - nu*nu);
+  const m = [
+    [k[0],k[1],k[2],k[3],k[4],k[5],k[6],k[7]],
+    [k[1],k[0],k[7],k[6],k[5],k[4],k[3],k[2]],
+    [k[2],k[7],k[0],k[5],k[6],k[3],k[4],k[1]],
+    [k[3],k[6],k[5],k[0],k[7],k[2],k[1],k[4]],
+    [k[4],k[5],k[6],k[7],k[0],k[1],k[2],k[3]],
+    [k[5],k[4],k[3],k[2],k[1],k[0],k[7],k[6]],
+    [k[6],k[3],k[4],k[1],k[2],k[7],k[0],k[5]],
+    [k[7],k[2],k[1],k[4],k[3],k[6],k[5],k[0]]];
+  const KE = new Float64Array(64);
+  for (let i = 0; i < 8; i++) for (let j = 0; j < 8; j++) KE[i*8+j] = c * m[i][j];
+  return KE;
+}
+
+// Mesh: elements (ix, iy), iy counted from the top row. Element node order LL, LR, UR, UL (y up).
+function makeMesh(nelx, nely) {
+  const colwise = nely <= nelx;
+  const node = colwise ? (ix, iy) => ix*(nely+1) + iy : (ix, iy) => iy*(nelx+1) + ix;
+  const nel = nelx*nely, nn = (nelx+1)*(nely+1), ndof = 2*nn;
+  const edof = new Int32Array(nel*8);
+  let bw = 0;
+  for (let ix = 0; ix < nelx; ix++) for (let iy = 0; iy < nely; iy++) {
+    const e = ix*nely + iy;
+    const ns = [node(ix, iy+1), node(ix+1, iy+1), node(ix+1, iy), node(ix, iy)];
+    let lo = Infinity, hi = -Infinity;
+    for (let a = 0; a < 4; a++) {
+      edof[e*8+2*a] = 2*ns[a]; edof[e*8+2*a+1] = 2*ns[a]+1;
+      lo = Math.min(lo, 2*ns[a]); hi = Math.max(hi, 2*ns[a]+1);
+    }
+    bw = Math.max(bw, hi - lo);
+  }
+  return { nelx, nely, nel, nn, ndof, edof, bw, node };
+}
+
+// Symmetric banded matrix, lower band storage: A[i][j], i-bw <= j <= i at i*(bw+1) + (j-i+bw)
+function assembleBand(mesh, KE, Evals) {
+  const { ndof, bw, nel, edof } = mesh, w = bw + 1;
+  const A = new Float64Array(ndof * w);
+  for (let e = 0; e < nel; e++) {
+    const s = Evals[e], o = e*8;
+    for (let a = 0; a < 8; a++) {
+      const gi = edof[o+a];
+      for (let b = 0; b < 8; b++) {
+        const gj = edof[o+b];
+        if (gi >= gj) A[gi*w + (gj - gi + bw)] += s * KE[a*8+b];
+      }
+    }
+  }
+  return A;
+}
+
+function applyFixed(A, mesh, fixedMask) {
+  const { ndof, bw } = mesh, w = bw + 1;
+  for (let d = 0; d < ndof; d++) {
+    if (!fixedMask[d]) continue;
+    for (let j = Math.max(0, d-bw); j < d; j++) A[d*w + (j-d+bw)] = 0;
+    for (let i = d+1; i <= Math.min(ndof-1, d+bw); i++) A[i*w + (d-i+bw)] = 0;
+    A[d*w + bw] = 1;
+  }
+}
+
+function cholBand(A, n, bw) {
+  const w = bw + 1;
+  for (let i = 0; i < n; i++) {
+    const j0 = Math.max(0, i - bw), ri = i*w - i + bw;
+    for (let j = j0; j <= i; j++) {
+      const rj = j*w - j + bw;
+      let s = A[ri + j];
+      const k0 = Math.max(j0, j - bw);
+      for (let k = k0; k < j; k++) s -= A[ri + k] * A[rj + k];
+      if (j === i) {
+        if (!(s > 0)) s = 1e-30; // guard
+        A[ri + i] = Math.sqrt(s);
+      } else A[ri + j] = s / A[rj + j];
+    }
+  }
+}
+
+function solveBand(L, n, bw, f) {
+  const w = bw + 1, x = Float64Array.from(f);
+  for (let i = 0; i < n; i++) {
+    const ri = i*w - i + bw; let s = x[i];
+    for (let k = Math.max(0, i-bw); k < i; k++) s -= L[ri + k] * x[k];
+    x[i] = s / L[ri + i];
+  }
+  for (let i = n-1; i >= 0; i--) {
+    let s = x[i];
+    const kmax = Math.min(n-1, i+bw);
+    for (let k = i+1; k <= kmax; k++) s -= L[k*w - k + bw + i] * x[k];
+    x[i] = s / L[i*w - i + bw + i];
+  }
+  return x;
+}
+
+function feSolve(mesh, KE, Evals, F, fixedMask) {
+  const A = assembleBand(mesh, KE, Evals);
+  applyFixed(A, mesh, fixedMask);
+  cholBand(A, mesh.ndof, mesh.bw);
+  const f = Float64Array.from(F);
+  for (let d = 0; d < mesh.ndof; d++) if (fixedMask[d]) f[d] = 0;
+  return solveBand(A, mesh.ndof, mesh.bw, f);
+}
+
+// Density filter as CSR (weights rmin - dist)
+function makeFilter(nelx, nely, rmin) {
+  const nel = nelx*nely, R = Math.ceil(rmin) - 1;
+  const ptr = new Int32Array(nel+1), idx = [], wt = [];
+  const Hs = new Float64Array(nel);
+  for (let ix = 0; ix < nelx; ix++) for (let iy = 0; iy < nely; iy++) {
+    const e = ix*nely + iy;
+    for (let jx = Math.max(0, ix-R); jx <= Math.min(nelx-1, ix+R); jx++)
+      for (let jy = Math.max(0, iy-R); jy <= Math.min(nely-1, iy+R); jy++) {
+        const wgt = rmin - Math.hypot(ix-jx, iy-jy);
+        if (wgt > 0) { idx.push(jx*nely + jy); wt.push(wgt); Hs[e] += wgt; }
+      }
+    ptr[e+1] = idx.length;
+  }
+  return { ptr, idx: Int32Array.from(idx), wt: Float64Array.from(wt), Hs };
+}
+
+function applyH(flt, v, out) { // out = H v  (H symmetric)
+  const { ptr, idx, wt } = flt;
+  for (let e = 0; e < ptr.length - 1; e++) {
+    let s = 0;
+    for (let p = ptr[e]; p < ptr[e+1]; p++) s += wt[p] * v[idx[p]];
+    out[e] = s;
+  }
+  return out;
+}
+
+// Plane-stress element stress at centroid. Returns von Mises.
+function elementVM(mesh, u, nu, E, h, e) {
+  const o = e*8, ed = mesh.edof;
+  const dx = [-1, 1, 1, -1], dy = [-1, -1, 1, 1];
+  let ex = 0, ey = 0, g = 0;
+  for (let a = 0; a < 4; a++) {
+    const ua = u[ed[o+2*a]], va = u[ed[o+2*a+1]];
+    ex += dx[a]*ua; ey += dy[a]*va; g += dy[a]*ua + dx[a]*va;
+  }
+  ex /= 2*h; ey /= 2*h; g /= 2*h;
+  const c = E / (1 - nu*nu);
+  const sx = c*(ex + nu*ey), sy = c*(nu*ex + ey), txy = c*(1-nu)/2*g;
+  return Math.sqrt(sx*sx - sx*sy + sy*sy + 3*txy*txy);
+}
+
+const projT = (x, b, eta) => (Math.tanh(b*eta) + Math.tanh(b*(x-eta))) / (Math.tanh(b*eta) + Math.tanh(b*(1-eta)));
+const projD = (x, b, eta) => { const t = Math.tanh(b*(x-eta)); return b*(1-t*t) / (Math.tanh(b*eta) + Math.tanh(b*(1-eta))); };
+
+/*
+ job: { nelx, nely, nu, F (Float64Array ndof, N), fixed (Uint8Array ndof), passive (Int8Array nel: 0 design,1 void,2 solid),
+        vf (of non-void area), rmin (elements), penal, symX, maxIter, projection (bool), loadNodes (Int32Array) }
+ onIter(it, c, vol, beta, xPhys)
+*/
+function optimize(job, onIter) {
+  const { nelx, nely, nu, passive } = job;
+  const penal = job.penal || 3, Emin = 1e-9, eta = 0.5;
+  const mesh = makeMesh(nelx, nely), KE = makeKE(nu), nel = mesh.nel;
+  const flt = makeFilter(nelx, nely, job.rmin);
+  let nDesign = 0, nSolid = 0, nVoid = 0;
+  for (let e = 0; e < nel; e++) { if (passive[e] === 0) nDesign++; else if (passive[e] === 2) nSolid++; else nVoid++; }
+  const target = Math.max(nSolid + 1, job.vf * (nel - nVoid)); // material in element-units
+  const x = new Float64Array(nel), xT = new Float64Array(nel), xP = new Float64Array(nel);
+  const fillDesign = Math.min(1, Math.max(0.01, (target - nSolid) / Math.max(1, nDesign)));
+  for (let e = 0; e < nel; e++) x[e] = passive[e] === 1 ? 0 : passive[e] === 2 ? 1 : fillDesign;
+  const proj = job.projection !== false;
+  let beta = 1;
+  const physical = (xin) => {
+    applyH(flt, xin, xT);
+    for (let e = 0; e < nel; e++) {
+      xT[e] /= flt.Hs[e];
+      let v = proj ? projT(xT[e], beta, eta) : xT[e];
+      if (passive[e] === 1) v = 0; else if (passive[e] === 2) v = 1;
+      xP[e] = v;
+    }
+  };
+  physical(x);
+  const Ev = new Float64Array(nel), dc = new Float64Array(nel), dv = new Float64Array(nel);
+  const tmp = new Float64Array(nel), xnew = new Float64Array(nel);
+  const maxIter = job.maxIter || 120;
+  let c = 0, it = 0, change = 1, loopBeta = 0;
+  const mirror = (e) => { const ix = Math.floor(e / nely), iy = e % nely; return (nelx-1-ix)*nely + iy; };
+  while (it < maxIter) {
+    it++; loopBeta++;
+    for (let e = 0; e < nel; e++) Ev[e] = Emin + Math.pow(xP[e], penal) * (1 - Emin);
+    const U = feSolve(mesh, KE, Ev, job.F, job.fixed);
+    c = 0;
+    for (let e = 0; e < nel; e++) {
+      const o = e*8; let ce = 0;
+      for (let a = 0; a < 8; a++) {
+        let s = 0; const ua = mesh.edof[o+a];
+        for (let b = 0; b < 8; b++) s += KE[a*8+b] * U[mesh.edof[o+b]];
+        ce += U[ua] * s;
+      }
+      c += Ev[e] * ce;
+      dc[e] = passive[e] ? 0 : -penal * (1 - Emin) * Math.pow(xP[e], penal-1) * ce;
+      dv[e] = passive[e] ? 0 : 1;
+    }
+    // chain rule through projection and filter
+    for (let e = 0; e < nel; e++) {
+      const d = proj ? projD(xT[e], beta, eta) : 1;
+      tmp[e] = dc[e] * d / flt.Hs[e];
+    }
+    applyH(flt, tmp, dc);
+    for (let e = 0; e < nel; e++) { const d = proj ? projD(xT[e], beta, eta) : 1; tmp[e] = dv[e] * d / flt.Hs[e]; }
+    applyH(flt, tmp, dv);
+    if (job.symX) for (let e = 0; e < nel; e++) {
+      const m = mirror(e); if (m > e) { const a = (dc[e]+dc[m])/2, b = (dv[e]+dv[m])/2; dc[e]=dc[m]=a; dv[e]=dv[m]=b; }
+    }
+    // OC with bisection on physical volume
+    let l1 = 0, l2 = 1e9; const move = 0.2;
+    while ((l2 - l1) / (l1 + l2) > 1e-4 && l2 > 1e-40) {
+      const lm = 0.5 * (l1 + l2);
+      for (let e = 0; e < nel; e++) {
+        if (passive[e] === 1) { xnew[e] = 0; continue; }
+        if (passive[e] === 2) { xnew[e] = 1; continue; }
+        const r = Math.sqrt(Math.max(0, -dc[e]) / Math.max(1e-30, dv[e]) / lm);
+        xnew[e] = Math.max(0, Math.max(x[e]-move, Math.min(1, Math.min(x[e]+move, x[e]*r))));
+      }
+      physical(xnew);
+      let vol = 0; for (let e = 0; e < nel; e++) vol += xP[e];
+      if (vol > target) l1 = lm; else l2 = lm;
+    }
+    change = 0;
+    for (let e = 0; e < nel; e++) { change = Math.max(change, Math.abs(xnew[e] - x[e])); x[e] = xnew[e]; }
+    physical(x);
+    let vol = 0; for (let e = 0; e < nel; e++) vol += xP[e];
+    if (onIter) onIter(it, c, vol / Math.max(1, nel - nVoid), beta, xP);
+    if (proj && beta < 16 && (loopBeta >= 25 || change <= 0.01)) { beta *= 2; loopBeta = 0; physical(x); }
+    else if ((!proj || beta >= 16) && change < 0.01 && it > 20) break;
+  }
+  return { xPhys: Float64Array.from(xP), c, it, mesh };
+}
+
+// ---------- post-processing ----------
+function components(nelx, nely, mask) { // 4-connected labels for mask==1
+  const nel = nelx*nely, lab = new Int32Array(nel).fill(-1); let n = 0;
+  const st = new Int32Array(nel);
+  for (let s = 0; s < nel; s++) {
+    if (!mask[s] || lab[s] >= 0) continue;
+    let sp = 0; st[sp++] = s; lab[s] = n;
+    while (sp) {
+      const e = st[--sp], ix = Math.floor(e/nely), iy = e % nely;
+      const nb = [ix>0 ? e-nely : -1, ix<nelx-1 ? e+nely : -1, iy>0 ? e-1 : -1, iy<nely-1 ? e+1 : -1];
+      for (const m of nb) if (m >= 0 && mask[m] && lab[m] < 0) { lab[m] = n; st[sp++] = m; }
+    }
+    n++;
+  }
+  return { lab, n };
+}
+
+function morphOpen(nelx, nely, solid, r) { // opening with disk radius r (elements); returns opened mask
+  const nel = nelx*nely, R = Math.floor(r), disk = [];
+  for (let a = -R; a <= R; a++) for (let b = -R; b <= R; b++) if (a*a + b*b <= r*r) disk.push([a, b]);
+  const er = new Uint8Array(nel), op = new Uint8Array(nel);
+  for (let ix = 0; ix < nelx; ix++) for (let iy = 0; iy < nely; iy++) {
+    let ok = 1;
+    for (const [a, b] of disk) { const jx = ix+a, jy = iy+b;
+      if (jx < 0 || jy < 0 || jx >= nelx || jy >= nely || !solid[jx*nely+jy]) { ok = 0; break; } }
+    er[ix*nely+iy] = ok;
+  }
+  for (let ix = 0; ix < nelx; ix++) for (let iy = 0; iy < nely; iy++) {
+    if (!er[ix*nely+iy]) continue;
+    for (const [a, b] of disk) { const jx = ix+a, jy = iy+b;
+      if (jx >= 0 && jy >= 0 && jx < nelx && jy < nely) op[jx*nely+jy] = 1; }
+  }
+  return op;
+}
+
+/* Analyse a 0/1 layout with E = 1 MPa, t = 1 mm, real loads (N), element size h (mm).
+   Stress scales as 1/t; displacement as 1/(E t). */
+function evaluate(job, field, h) {
+  const { nelx, nely, nu, passive } = job;
+  const mesh = makeMesh(nelx, nely), nel = mesh.nel, KE = makeKE(nu);
+  const solid = new Uint8Array(nel);
+  for (let e = 0; e < nel; e++) solid[e] = passive[e] === 2 ? 1 : passive[e] === 1 ? 0 : (field[e] > 0.5 ? 1 : 0);
+  // enforce minimum member width: grow under-width members (2 passes), never into keep-out zones
+  let added = 0;
+  const rW0 = ((job.minWidth || 0) / h - 1) / 2;
+  if (job.enforceWidth && rW0 >= 1) for (let pass = 0; pass < 2; pass++) {
+    const op = morphOpen(nelx, nely, solid, rW0);
+    const d = Math.max(1, Math.ceil(rW0 / 2)), D = [];
+    for (let a = -d; a <= d; a++) for (let b = -d; b <= d; b++) if (a*a + b*b <= d*d + 0.5) D.push([a, b]);
+    const grow = [];
+    for (let ix = 0; ix < nelx; ix++) for (let iy = 0; iy < nely; iy++) {
+      const e = ix*nely + iy; if (!solid[e] || op[e]) continue;
+      for (const [a, b] of D) { const jx = ix+a, jy = iy+b;
+        if (jx >= 0 && jy >= 0 && jx < nelx && jy < nely) { const m = jx*nely + jy; if (!solid[m] && passive[m] !== 1) grow.push(m); } }
+    }
+    for (const m of grow) if (!solid[m]) { solid[m] = 1; added++; }
+    if (!grow.length) break;
+  }
+  // fill enclosed slivers of void too small to cut (smaller than a min-width square)
+  let filled = 0;
+  { const vmask = new Uint8Array(nel); for (let e = 0; e < nel; e++) vmask[e] = solid[e] ? 0 : 1;
+    const vc = components(nelx, nely, vmask), size = new Int32Array(vc.n), edge = new Uint8Array(vc.n), keepout = new Uint8Array(vc.n);
+    for (let e = 0; e < nel; e++) if (vmask[e]) { const l = vc.lab[e], ix = Math.floor(e/nely), iy = e % nely; size[l]++;
+      if (ix === 0 || iy === 0 || ix === nelx-1 || iy === nely-1) edge[l] = 1; if (passive[e] === 1) keepout[l] = 1; }
+    const minA = Math.max(4, Math.pow((job.minWidth || 0) / h, 2));
+    for (let e = 0; e < nel; e++) if (vmask[e]) { const l = vc.lab[e]; if (!edge[l] && !keepout[l] && size[l] < minA) { solid[e] = 1; filled++; } } }
+  // keep only material connected to a support
+  const fixedNode = new Uint8Array(mesh.nn);
+  for (let d = 0; d < mesh.ndof; d++) if (job.fixed[d]) fixedNode[d >> 1] = 1;
+  const { lab, n } = components(nelx, nely, solid);
+  const keep = new Uint8Array(n);
+  for (let e = 0; e < nel; e++) if (solid[e]) for (let a = 0; a < 4; a++) if (fixedNode[mesh.edof[e*8+2*a] >> 1]) keep[lab[e]] = 1;
+  let anyKeep = false; for (let i = 0; i < n; i++) anyKeep = anyKeep || keep[i];
+  let removed = 0;
+  if (anyKeep) for (let e = 0; e < nel; e++) if (solid[e] && !keep[lab[e]]) { solid[e] = 0; removed++; }
+  // loaded nodes must touch material
+  const loadNode = new Uint8Array(mesh.nn);
+  for (let d = 0; d < mesh.ndof; d++) if (job.F[d] !== 0) loadNode[d >> 1] = 1;
+  const touched = new Uint8Array(mesh.nn);
+  for (let e = 0; e < nel; e++) if (solid[e]) for (let a = 0; a < 4; a++) touched[mesh.edof[e*8+2*a] >> 1] = 1;
+  let brokenLoads = 0; for (let i = 0; i < mesh.nn; i++) if (loadNode[i] && !touched[i]) brokenLoads++;
+  // FE with solid/void (void = 1e-6 of solid)
+  const Ev = new Float64Array(nel);
+  for (let e = 0; e < nel; e++) Ev[e] = solid[e] ? 1 : 1e-6;
+  const U = feSolve(mesh, KE, Ev, job.F, job.fixed);
+  const vm = new Float32Array(nel);
+  let vmMax = 0, vmMaxAll = 0, vmEl = -1, nSolid = 0;
+  for (let e = 0; e < nel; e++) {
+    if (!solid[e]) continue;
+    nSolid++;
+    const s = elementVM(mesh, U, nu, 1, h, e); vm[e] = s;
+    vmMaxAll = Math.max(vmMaxAll, s);
+    let atLoad = false;
+    for (let a = 0; a < 4; a++) if (loadNode[mesh.edof[e*8+2*a] >> 1]) atLoad = true;
+    if (!atLoad && s > vmMax) { vmMax = s; vmEl = e; }
+  }
+  const dmag = new Float32Array(mesh.nn);
+  let dMax = 0, dLoad = 0;
+  for (let i = 0; i < mesh.nn; i++) {
+    const m = Math.hypot(U[2*i], U[2*i+1]); dmag[i] = m;
+    if (touched[i]) dMax = Math.max(dMax, m);
+    if (loadNode[i]) dLoad = Math.max(dLoad, m);
+  }
+  let comp = 0; for (let d = 0; d < mesh.ndof; d++) comp += job.F[d] * U[d];
+  // holes: void components not touching the domain edge
+  const voidMask = new Uint8Array(nel); for (let e = 0; e < nel; e++) voidMask[e] = solid[e] ? 0 : 1;
+  const vc = components(nelx, nely, voidMask), edgeTouch = new Uint8Array(vc.n);
+  for (let e = 0; e < nel; e++) if (voidMask[e]) { const ix = Math.floor(e/nely), iy = e % nely;
+    if (ix === 0 || iy === 0 || ix === nelx-1 || iy === nely-1) edgeTouch[vc.lab[e]] = 1; }
+  let holes = 0; for (let i = 0; i < vc.n; i++) if (!edgeTouch[i]) holes++;
+  // thin features vs minimum member width
+  let thin = new Uint8Array(nel), thinCount = 0;
+  const rW = ((job.minWidth || 0) / h - 1) / 2;
+  if (rW >= 1) {
+    const op = morphOpen(nelx, nely, solid, rW);
+    for (let e = 0; e < nel; e++) if (solid[e] && !op[e] && passive[e] !== 2) { thin[e] = 1; thinCount++; }
+  }
+  const U32 = new Float32Array(U);
+  return { added, filled, solid, vm, vmMax, vmMaxAll, vmEl, dmag, dMax, dLoad, comp, nSolid, holes, removed, brokenLoads, thin, thinCount, U: U32 };
+}
+
+if (typeof module !== 'undefined') module.exports = { makeKE, makeMesh, feSolve, makeFilter, optimize, evaluate, components, morphOpen };
+
+self.onmessage = (m) => {
+  const j = m.data;
+  try {
+    if (j.kind === 'opt') {
+      let last = 0;
+      const res = optimize(j, (it, c, vol, beta, xP) => {
+        const now = Date.now();
+        if (now - last > 60 || it === 1) { last = now; self.postMessage({ type: 'iter', jobId: j.jobId, runId: j.runId, it, beta, vol, x: Float32Array.from(xP) }); }
+      });
+      const ev = evaluate(j, res.xPhys, j.h);
+      self.postMessage({ type: 'done', jobId: j.jobId, runId: j.runId, it: res.it, x: Float32Array.from(res.xPhys), ev });
+    } else {
+      const field = new Float64Array(j.nelx * j.nely).fill(1);
+      const ev = evaluate(j, field, j.h);
+      self.postMessage({ type: 'done', jobId: j.jobId, runId: j.runId, it: 0, x: new Float32Array(field), ev });
+    }
+  } catch (err) { self.postMessage({ type: 'error', jobId: j.jobId, runId: j.runId, message: String(err && err.message || err) }); }
+};
+</script>
+
+<script>
+'use strict';
+// ---------------- data ----------------
+const MATERIALS = {
+  al6061: { name: 'Aluminium 6061-T6', E: 68900, nu: 0.33, Sy: 276, rho: 2700 },
+  al5052: { name: 'Aluminium 5052-H32', E: 70300, nu: 0.33, Sy: 193, rho: 2680 },
+  e250:   { name: 'Structural steel IS 2062 E250', E: 200000, nu: 0.30, Sy: 250, rho: 7850 },
+  ss304:  { name: 'Stainless steel 304', E: 193000, nu: 0.29, Sy: 215, rho: 8000 },
+  ti64:   { name: 'Titanium Ti-6Al-4V', E: 113800, nu: 0.34, Sy: 880, rho: 4430 },
+  acry:   { name: 'Acrylic (PMMA) sheet', E: 3200, nu: 0.37, Sy: 60, rho: 1190 },
+  pla:    { name: 'PLA, FDM printed', E: 3500, nu: 0.36, Sy: 40, rho: 1240 },
+  pa12:   { name: 'Nylon PA12, SLS', E: 1700, nu: 0.40, Sy: 46, rho: 1010 },
+};
+const PROCESSES = {
+  laser:  { name: 'Laser / plasma cut plate', minW: 3, cut: true },
+  water:  { name: 'Waterjet cut plate', minW: 2.5, cut: true },
+  mill:   { name: 'CNC milled plate (Ø6 end mill)', minW: 6, cut: false },
+  fdm:    { name: 'FDM 3D print', minW: 2, cut: false },
+  am:     { name: 'SLS / metal additive', minW: 1.2, cut: false },
+  custom: { name: 'Custom minimum width', minW: null, cut: false },
+};
+const GAUGES = [0.5, 0.8, 1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10, 12, 14, 16, 18, 20, 22, 25, 28, 30, 32, 36, 40, 45, 50, 60, 70, 80, 100];
+const RES = { draft: 1800, std: 3200, fine: 6400 };
+const VARIANTS = [
+  { id: 'A', name: 'Lean', vf: 0.20, bold: false },
+  { id: 'B', name: 'Balanced', vf: 0.30, bold: false },
+  { id: 'C', name: 'Robust', vf: 0.45, bold: false },
+  { id: 'D', name: 'Lean, bold webs', vf: 0.20, bold: true },
+  { id: 'E', name: 'Balanced, bold webs', vf: 0.30, bold: true },
+  { id: 'F', name: 'Robust, bold webs', vf: 0.45, bold: true },
+];
+
+const PRESETS = {
+  cantilever: () => ({ W: 200, H: 100, sym: false, features: [
+    { type: 'fix', dof: 'xy', x0: 0, y0: 0, x1: 0, y1: 100 },
+    { type: 'load', x: 200, y: 50, fx: 0, fy: -2000 } ] }),
+  beam: () => ({ W: 300, H: 75, sym: true, features: [
+    { type: 'fix', dof: 'xy', x0: 0, y0: 0, x1: 6, y1: 0 },
+    { type: 'fix', dof: 'y', x0: 294, y0: 0, x1: 300, y1: 0 },
+    { type: 'load', x: 150, y: 75, fx: 0, fy: -3000 } ] }),
+  lbracket: () => ({ W: 160, H: 160, sym: false, features: [
+    { type: 'void', shape: 'rect', x0: 64, y0: 64, x1: 160, y1: 160 },
+    { type: 'fix', dof: 'xy', x0: 0, y0: 160, x1: 64, y1: 160 },
+    { type: 'load', x: 160, y: 32, fx: 0, fy: -1500 } ] }),
+  shelf: () => ({ W: 150, H: 150, sym: false, features: [
+    { type: 'fix', dof: 'xy', x0: 0, y0: 125, x1: 0, y1: 140 },
+    { type: 'fix', dof: 'xy', x0: 0, y0: 10, x1: 0, y1: 25 },
+    { type: 'solid', shape: 'rect', x0: 0, y0: 143, x1: 150, y1: 150 },
+    { type: 'load', x: 50, y: 150, fx: 0, fy: -400 },
+    { type: 'load', x: 100, y: 150, fx: 0, fy: -400 },
+    { type: 'load', x: 148, y: 150, fx: 0, fy: -400 } ] }),
+  blank: () => ({ W: 200, H: 100, sym: false, features: [] }),
+};
+
+// ---------------- state ----------------
+const S = {
+  preset: 'cantilever', W: 200, H: 100, res: 'std', sym: false,
+  mat: 'al6061', proc: 'laser', minW: 3, fos: 2, dlim: 0, autoT: true, tFix: 5,
+  features: [], tool: 'load', supType: 'xy', voidShape: 'rect', view: 'shape',
+  run: null, results: {}, selected: 'B', dirty: false, lastDisc: null,
+};
+const $ = (id) => document.getElementById(id);
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const fmt = (v, d = 1) => (v === undefined || v === null || !isFinite(v)) ? '–' : v.toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d });
+let toastT;
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2600); }
+
+function applyPreset(key) {
+  const p = PRESETS[key]();
+  S.preset = key; S.W = p.W; S.H = p.H; S.sym = p.sym; S.features = p.features;
+  syncInputs(); markDirty(); draw();
+}
+
+// ---------------- discretization ----------------
+function discretize() {
+  const N = RES[S.res];
+  let h = Math.sqrt(S.W * S.H / N);
+  const nelx = Math.max(8, Math.round(S.W / h)), nely = Math.max(4, Math.round(S.H / h));
+  const hx = S.W / nelx, hy = S.H / nely; h = (hx + hy) / 2;
+  const nel = nelx * nely, nn = (nelx + 1) * (nely + 1), ndof = 2 * nn;
+  const colwise = nely <= nelx;
+  const node = colwise ? (ix, iy) => ix * (nely + 1) + iy : (ix, iy) => iy * (nelx + 1) + ix;
+  const nodeXY = (ix, iy) => [ix * hx, S.H - iy * hy];
+  const passive = new Int8Array(nel), F = new Float64Array(ndof), fixed = new Uint8Array(ndof);
+  const inside = (f, x, y) => f.shape === 'circle' ? Math.hypot(x - f.cx, y - f.cy) <= f.r
+    : x >= Math.min(f.x0, f.x1) && x <= Math.max(f.x0, f.x1) && y >= Math.min(f.y0, f.y1) && y <= Math.max(f.y0, f.y1);
+  const center = (ix, iy) => [(ix + 0.5) * hx, S.H - (iy + 0.5) * hy];
+  for (const f of S.features) if (f.type === 'solid') for (let ix = 0; ix < nelx; ix++) for (let iy = 0; iy < nely; iy++) { const [x, y] = center(ix, iy); if (inside(f, x, y)) passive[ix * nely + iy] = 2; }
+  const padR = Math.max(1.6 * h, 0.6 * S.minW);
+  const pads = [];
+  const nearest = (x, y) => [Math.min(nelx, Math.max(0, Math.round(x / hx))), Math.min(nely, Math.max(0, Math.round((S.H - y) / hy)))];
+  let nFixX = 0, nFixY = 0;
+  const fixNodes = new Set();
+  for (const f of S.features) if (f.type === 'fix') {
+    const x0 = Math.min(f.x0, f.x1) - hx / 2, x1 = Math.max(f.x0, f.x1) + hx / 2, y0 = Math.min(f.y0, f.y1) - hy / 2, y1 = Math.max(f.y0, f.y1) + hy / 2;
+    const hit = [];
+    for (let ix = 0; ix <= nelx; ix++) for (let iy = 0; iy <= nely; iy++) { const [x, y] = nodeXY(ix, iy); if (x >= x0 && x <= x1 && y >= y0 && y <= y1) hit.push([ix, iy]); }
+    if (!hit.length) hit.push(nearest((f.x0 + f.x1) / 2, (f.y0 + f.y1) / 2));
+    for (const [ix, iy] of hit) { const n = node(ix, iy); fixNodes.add(n);
+      if (f.dof !== 'y' && !fixed[2 * n]) { fixed[2 * n] = 1; nFixX++; }
+      if (f.dof !== 'x' && !fixed[2 * n + 1]) { fixed[2 * n + 1] = 1; nFixY++; } }
+    if (hit.length <= 5) for (const [ix, iy] of hit) pads.push(nodeXY(ix, iy));
+  }
+  let nLoads = 0, loadInVoid = false;
+  for (const f of S.features) if (f.type === 'load') {
+    const [ix, iy] = nearest(f.x, f.y), n = node(ix, iy);
+    F[2 * n] += f.fx; F[2 * n + 1] += f.fy; nLoads++;
+    pads.push(nodeXY(ix, iy));
+  }
+  for (const [px, py] of pads) for (let ix = 0; ix < nelx; ix++) for (let iy = 0; iy < nely; iy++) {
+    const [x, y] = center(ix, iy); if (Math.hypot(x - px, y - py) <= padR) passive[ix * nely + iy] = 2; }
+  for (const f of S.features) if (f.type === 'void') for (let ix = 0; ix < nelx; ix++) for (let iy = 0; iy < nely; iy++) {
+    const [x, y] = center(ix, iy); if (inside(f, x, y)) { const e = ix * nely + iy; if (passive[e] === 2) loadInVoid = true; passive[e] = 1; } }
+  const errors = [];
+  if (!nLoads) errors.push('Add at least one load: pick the Load tool and tap where the force acts.');
+  if (nFixX === 0 || nFixY === 0 || nFixX + nFixY < 3) errors.push('The part can still move or spin. Add a fixed support, or supports that hold it both horizontally and vertically.');
+  if (loadInVoid) errors.push('A load or support sits inside a keep-out zone. Move it onto material.');
+  const rmin0 = Math.max(1.5, 0.6 * S.minW / h);
+  return { nelx, nely, hx, hy, h, nel, ndof, passive, F, fixed, errors, rmin0, nu: MATERIALS[S.mat].nu };
+}
+
+// ---------------- worker pool ----------------
+const workerURL = URL.createObjectURL(new Blob([$('worker-src').textContent], { type: 'text/javascript' }));
+let pool = [];
+function startRun() {
+  const d = discretize();
+  if (d.errors.length) { showBanner(d.errors.join(' '), true); return; }
+  pool.forEach(w => w.terminate()); pool = [];
+  const runId = Date.now();
+  S.run = { runId, disc: d, queue: [], active: 0, done: 0, total: VARIANTS.length + 1, started: performance.now() };
+  S.results = {}; S.dirty = false; S.lastDisc = d; showBanner('');
+  const rB = Math.max(2.5, 1.8 * d.rmin0);
+  const base = { runId, nelx: d.nelx, nely: d.nely, nu: d.nu, F: d.F, fixed: d.fixed, passive: d.passive, h: d.h, minWidth: S.minW, symX: S.sym, enforceWidth: true };
+  S.run.queue.push({ ...base, jobId: 'base', kind: 'eval' });
+  for (const v of VARIANTS) S.run.queue.push({ ...base, jobId: v.id, kind: 'opt', vf: v.vf, rmin: v.bold ? rB : d.rmin0, maxIter: 110, penal: 3 });
+  for (const j of S.run.queue) S.results[j.jobId] = { id: j.jobId, status: 'queued', it: 0, x: null, ev: null };
+  if (!S.results[S.selected]) S.selected = 'B';
+  const nW = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
+  for (let i = 0; i < nW; i++) { const w = new Worker(workerURL); w.onmessage = onWorker; pool.push(w); feed(w); }
+  $('go').textContent = 'Restart'; $('go').classList.remove('stale');
+  $('runinfo').textContent = `${d.nelx} × ${d.nely} elements (${fmt(d.h, 2)} mm), ${nW} parallel solver${nW > 1 ? 's' : ''}.`;
+  buildGallery(); renderAll();
+}
+function feed(w) {
+  const r = S.run; if (!r || !r.queue.length) return;
+  const job = r.queue.shift(); r.active++; S.results[job.jobId].status = 'running'; w.postMessage(job);
+}
+function onWorker(m) {
+  const d = m.data; if (!S.run || d.runId !== S.run.runId) return;
+  const R = S.results[d.jobId];
+  if (d.type === 'iter') { R.x = d.x; R.it = d.it; R.beta = d.beta; updateCard(d.jobId); if (d.jobId === S.selected) draw(); return; }
+  S.run.active--; S.run.done++;
+  if (d.type === 'error') { R.status = 'error'; R.error = d.message; }
+  else { R.status = 'done'; R.x = d.x; R.ev = d.ev; R.it = d.it; }
+  feed(m.target);
+  if (S.run.done === S.run.total) { S.run.finished = performance.now(); computeDistinct(); }
+  renderAll();
+}
+
+// ---------------- metrics ----------------
+function gaugeUp(t) { for (const g of GAUGES) if (g >= t - 1e-9) return g; return Math.ceil(t); }
+function metrics(R) {
+  if (!R || !R.ev || !S.lastDisc) return null;
+  const d = S.lastDisc, M = MATERIALS[S.mat], ev = R.ev;
+  const area = ev.nSolid * d.hx * d.hy;
+  const tS = ev.vmMax * S.fos / M.Sy;
+  const tD = S.dlim > 0 ? ev.dLoad / (M.E * S.dlim) : 0;
+  const tReq = Math.max(tS, tD);
+  const t = S.autoT ? gaugeUp(tReq) : S.tFix;
+  const sig = ev.vmMax / t, fos = M.Sy / sig, defl = ev.dLoad / (M.E * t), dmax = ev.dMax / (M.E * t);
+  const mass = M.rho * 1e-9 * area * t * 1000;
+  let Ftot = 0; for (let i = 0; i < d.F.length; i++) Ftot += d.F[i] * d.F[i]; Ftot = Math.sqrt(Ftot);
+  const pass = fos >= S.fos - 1e-9 && (!(S.dlim > 0) || defl <= S.dlim + 1e-12) && !ev.brokenLoads;
+  const thinPct = ev.nSolid ? ev.thinCount / ev.nSolid * 100 : 0;
+  const webWarn = PROCESSES[S.proc].cut && t > S.minW * 1.5;
+  return { area, tReq, t, sig, fos, defl, dmax, mass, stiff: defl > 0 ? Ftot / defl : 0, pass, thinPct, webWarn, holes: ev.holes, added: ev.added * d.hx * d.hy };
+}
+function computeDistinct() {
+  const ids = VARIANTS.map(v => v.id).filter(id => S.results[id] && S.results[id].ev);
+  for (const a of ids) {
+    let s = 0, n = 0; const A = S.results[a].ev.solid;
+    for (const b of ids) { if (a === b) continue; const B = S.results[b].ev.solid; let I = 0, U = 0;
+      for (let e = 0; e < A.length; e++) { if (A[e] && B[e]) I++; if (A[e] || B[e]) U++; } s += U ? 1 - I / U : 0; n++; }
+    S.results[a].distinct = n ? s / n * 100 : 0;
+  }
+}
+function recommended() {
+  let best = null, bm = Infinity;
+  for (const v of VARIANTS) { const m = metrics(S.results[v.id]); if (m && m.pass && m.mass < bm) { bm = m.mass; best = v.id; } }
+  return best;
+}
+
+// ---------------- canvas: main stage ----------------
+const stage = $('stage');
+let view = { ox: 0, oy: 0, s: 1, cw: 0, ch: 0 };
+function layoutStage() {
+  const cw = stage.parentElement.clientWidth - 24;
+  const ml = 44, mr = 18, mt = 18, mb = 40;
+  const maxH = Math.min(560, Math.max(260, window.innerHeight * 0.58));
+  const s = Math.min((cw - ml - mr) / S.W, (maxH - mt - mb) / S.H);
+  const ch = mt + mb + S.H * s;
+  const dpr = window.devicePixelRatio || 1;
+  stage.width = Math.round(cw * dpr); stage.height = Math.round(ch * dpr);
+  stage.style.height = ch + 'px';
+  view = { ox: ml + ((cw - ml - mr) - S.W * s) / 2, oy: mt, s, cw, ch, dpr };
+}
+const P = (x, y) => [view.ox + x * view.s, view.oy + (S.H - y) * view.s];
+function colormap(t) {
+  const st = [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]];
+  t = Math.max(0, Math.min(1, t)) * 4; const i = Math.min(3, Math.floor(t)), f = t - i;
+  return st[i].map((c, k) => Math.round(c + (st[i + 1][k] - c) * f));
+}
+function hexRGB(hex) { const h = hex.replace('#', ''); return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]; }
+
+function fieldImage(R, mode, w, h) {
+  const d = S.lastDisc, nelx = d.nelx, nely = d.nely;
+  const cv = document.createElement('canvas'); cv.width = nelx; cv.height = nely;
+  const g = cv.getContext('2d'), img = g.createImageData(nelx, nely);
+  const ink = hexRGB(css('--ink')), bad = hexRGB(css('--bad'));
+  const M = MATERIALS[S.mat], m = metrics(R);
+  for (let ix = 0; ix < nelx; ix++) for (let iy = 0; iy < nely; iy++) {
+    const e = ix * nely + iy, p = (iy * nelx + ix) * 4;
+    let rgb = ink, a = 0;
+    if (R.ev && mode !== 'live') {
+      if (R.ev.solid[e]) {
+        a = 255;
+        if (mode === 'stress' && m) rgb = colormap(R.ev.vm[e] / m.t / (M.Sy / S.fos));
+        if (mode === 'thin' && R.ev.thin[e]) rgb = bad;
+      }
+    } else if (R.x) a = Math.round(255 * Math.max(0, Math.min(1, R.x[e])));
+    img.data[p] = rgb[0]; img.data[p + 1] = rgb[1]; img.data[p + 2] = rgb[2]; img.data[p + 3] = a;
+  }
+  g.putImageData(img, 0, 0);
+  return cv;
+}
+
+function draw() {
+  layoutStage();
+  const g = stage.getContext('2d'), dpr = view.dpr;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, view.cw, view.ch);
+  const [x0, y0] = P(0, S.H), Wp = S.W * view.s, Hp = S.H * view.s;
+  // paper + grid every 10 mm
+  g.fillStyle = css('--paper'); g.fillRect(x0, y0, Wp, Hp);
+  g.strokeStyle = css('--grid'); g.lineWidth = 1; g.beginPath();
+  const step = S.W > 400 || S.H > 400 ? 50 : 10;
+  for (let x = step; x < S.W; x += step) { const [px] = P(x, 0); g.moveTo(Math.round(px) + .5, y0); g.lineTo(Math.round(px) + .5, y0 + Hp); }
+  for (let y = step; y < S.H; y += step) { const [, py] = P(0, y); g.moveTo(x0, Math.round(py) + .5); g.lineTo(x0 + Wp, Math.round(py) + .5); }
+  g.stroke();
+  // design
+  const R = S.results[S.selected];
+  const geomOK = R && S.lastDisc && S.lastDisc.nelx && R.x;
+  if (geomOK) {
+    if (S.view === 'deform' && R.ev) drawDeformed(g, R);
+    else {
+      const mode = R.ev ? (S.view === 'deform' ? 'shape' : S.view) : 'live';
+      g.save(); g.globalAlpha = S.dirty ? 0.25 : 1; g.imageSmoothingEnabled = true;
+      g.drawImage(fieldImage(R, mode), x0, y0, Wp, Hp); g.restore();
+    }
+  }
+  // domain outline
+  g.strokeStyle = css('--muted'); g.lineWidth = 1; g.setLineDash([4, 3]); g.strokeRect(x0 + .5, y0 + .5, Wp - 1, Hp - 1); g.setLineDash([]);
+  drawFeatures(g);
+  drawDims(g);
+  if (drag && drag.preview) drawPreview(g);
+  drawLegend();
+}
+
+function hatch(g, color) {
+  const c = document.createElement('canvas'); c.width = c.height = 8; const h = c.getContext('2d');
+  h.strokeStyle = color; h.lineWidth = 1; h.beginPath(); h.moveTo(0, 8); h.lineTo(8, 0); h.stroke();
+  return g.createPattern(c, 'repeat');
+}
+function rectPx(f) { const [ax, ay] = P(Math.min(f.x0, f.x1), Math.max(f.y0, f.y1)), [bx, by] = P(Math.max(f.x0, f.x1), Math.min(f.y0, f.y1)); return [ax, ay, bx - ax, by - ay]; }
+function drawFeatures(g) {
+  const accent = css('--accent'), load = css('--load'), muted = css('--muted'), ink = css('--ink');
+  for (const f of S.features) {
+    if (f.type === 'void' || f.type === 'solid') {
+      g.save();
+      g.fillStyle = f.type === 'void' ? hatch(g, muted) : hatch(g, ink);
+      g.strokeStyle = f.type === 'void' ? muted : ink; g.lineWidth = 1.2; g.setLineDash(f.type === 'void' ? [5, 3] : []);
+      g.globalAlpha = 0.85;
+      if (f.shape === 'circle') { const [cx, cy] = P(f.cx, f.cy); g.beginPath(); g.arc(cx, cy, f.r * view.s, 0, Math.PI * 2); g.fill(); g.stroke(); }
+      else { const [x, y, w, h] = rectPx(f); g.fillRect(x, y, w, h); g.strokeRect(x, y, w, h); }
+      g.restore();
+    }
+  }
+  for (const f of S.features) if (f.type === 'fix') {
+    let [x, y, w, h] = rectPx(f);
+    if (w < 6) { x -= (6 - w) / 2; w = 6; } if (h < 6) { y -= (6 - h) / 2; h = 6; }
+    g.save(); g.fillStyle = accent; g.globalAlpha = 0.22; g.fillRect(x, y, w, h); g.globalAlpha = 1;
+    g.strokeStyle = accent; g.lineWidth = 1.5; g.strokeRect(x, y, w, h);
+    // symbols along the long axis, placed outside the domain edge when the support lies on one
+    const vertical = h >= w, n = Math.max(1, Math.floor((vertical ? h : w) / 16));
+    for (let i = 0; i < n; i++) {
+      const t = (i + 0.5) / n, sx = vertical ? x + w / 2 : x + t * w, sy = vertical ? y + t * h : y + h / 2;
+      g.fillStyle = accent; g.strokeStyle = accent;
+      if (f.dof === 'xy') { g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx - 5, sy + 8); g.lineTo(sx + 5, sy + 8); g.closePath(); if (vertical) { g.save(); g.translate(sx, sy); g.rotate(Math.PI / 2); g.translate(-sx, -sy); g.fill(); g.restore(); } else g.fill(); }
+      else { g.beginPath(); g.arc(sx + (f.dof === 'x' ? -6 : 0), sy + (f.dof === 'y' ? 6 : 0), 3.5, 0, Math.PI * 2); g.lineWidth = 1.5; g.stroke(); }
+    }
+    g.restore();
+  }
+  for (const f of S.features) if (f.type === 'load') {
+    const mag = Math.hypot(f.fx, f.fy) || 1, [tx, ty] = P(f.x, f.y);
+    const ux = f.fx / mag, uy = -f.fy / mag, L = 46;
+    const sx = tx - ux * L, sy = ty - uy * L;
+    g.save(); g.strokeStyle = load; g.fillStyle = load; g.lineWidth = 2.5;
+    g.beginPath(); g.moveTo(sx, sy); g.lineTo(tx - ux * 8, ty - uy * 8); g.stroke();
+    g.beginPath(); g.moveTo(tx, ty); g.lineTo(tx - ux * 11 - uy * 5, ty - uy * 11 + ux * 5); g.lineTo(tx - ux * 11 + uy * 5, ty - uy * 11 - ux * 5); g.closePath(); g.fill();
+    g.font = `600 12px ${css('--font-mono')}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    const label = mag >= 1000 ? fmt(mag / 1000, 2) + ' kN' : fmt(mag, 0) + ' N';
+    const lx = Math.max(28, Math.min(view.cw - 28, sx - ux * 14 + (Math.abs(uy) > .7 ? (tx > view.cw - 60 ? -26 : 0) : 0)));
+    g.fillText(label, lx, sy - uy * 12 + (Math.abs(uy) > .7 ? (uy > 0 ? -2 : 2) : 0));
+    g.restore();
+  }
+}
+function drawDims(g) {
+  const muted = css('--muted'); g.save(); g.strokeStyle = muted; g.fillStyle = muted; g.lineWidth = 1;
+  g.font = `12px ${css('--font-mono')}`; g.textAlign = 'center'; g.textBaseline = 'top';
+  const [ax, ay] = P(0, 0), [bx] = P(S.W, 0), yb = ay + 18;
+  g.beginPath(); g.moveTo(ax, ay + 6); g.lineTo(ax, yb + 4); g.moveTo(bx, ay + 6); g.lineTo(bx, yb + 4); g.moveTo(ax, yb); g.lineTo(bx, yb); g.stroke();
+  const arrow = (x, y, dx, dy) => { g.beginPath(); g.moveTo(x, y); g.lineTo(x + dx * 7 - dy * 3, y + dy * 7 + dx * 3); g.lineTo(x + dx * 7 + dy * 3, y + dy * 7 - dx * 3); g.closePath(); g.fill(); };
+  arrow(ax, yb, 1, 0); arrow(bx, yb, -1, 0);
+  g.fillStyle = css('--paper'); const lw = g.measureText(S.W + '').width + 8; g.fillRect((ax + bx) / 2 - lw / 2, yb - 7, lw, 14);
+  g.fillStyle = muted; g.textBaseline = 'middle'; g.fillText(fmt(S.W, 0), (ax + bx) / 2, yb);
+  const [, ty] = P(0, S.H), xl = ax - 20;
+  g.beginPath(); g.moveTo(ax - 6, ty); g.lineTo(xl - 4, ty); g.moveTo(ax - 6, ay); g.lineTo(xl - 4, ay); g.moveTo(xl, ty); g.lineTo(xl, ay); g.stroke();
+  arrow(xl, ty, 0, 1); arrow(xl, ay, 0, -1);
+  g.save(); g.translate(xl, (ty + ay) / 2); g.rotate(-Math.PI / 2);
+  g.fillStyle = css('--panel'); const hw = g.measureText(S.H + '').width + 8; g.fillRect(-hw / 2, -7, hw, 14);
+  g.fillStyle = muted; g.fillText(fmt(S.H, 0), 0, 0); g.restore();
+  g.restore();
+}
+function drawDeformed(g, R) {
+  const d = S.lastDisc, ev = R.ev, U = ev.U, nely = d.nely, nelx = d.nelx;
+  const colwise = nely <= nelx, node = colwise ? (ix, iy) => ix * (nely + 1) + iy : (ix, iy) => iy * (nelx + 1) + ix;
+  let umax = 0; for (let i = 0; i < U.length; i += 2) umax = Math.max(umax, Math.hypot(U[i], U[i + 1]));
+  const k = umax ? 0.07 * Math.max(S.W, S.H) / umax : 0;
+  const pt = (ix, iy) => { const n = node(ix, iy); return P(ix * d.hx + k * U[2 * n], S.H - iy * d.hy + k * U[2 * n + 1]); };
+  g.save(); g.globalAlpha = 0.18; g.drawImage(fieldImage(R, 'shape'), ...P(0, S.H), S.W * view.s, S.H * view.s); g.globalAlpha = 1;
+  g.fillStyle = css('--accent'); g.beginPath();
+  for (let ix = 0; ix < nelx; ix++) for (let iy = 0; iy < nely; iy++) {
+    if (!ev.solid[ix * nely + iy]) continue;
+    const a = pt(ix, iy + 1), b = pt(ix + 1, iy + 1), c = pt(ix + 1, iy), e = pt(ix, iy);
+    g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.lineTo(c[0], c[1]); g.lineTo(e[0], e[1]); g.closePath();
+  }
+  g.fill(); g.restore();
+}
+function drawLegend() {
+  const L = $('legend'), m = metrics(S.results[S.selected]);
+  if (S.view === 'stress' && m) {
+    const M = MATERIALS[S.mat];
+    L.innerHTML = `<span>von Mises at ${fmt(m.t, 1)} mm</span><canvas id="cbar" width="160" height="10"></canvas><span class="mono">0 → ${fmt(M.Sy / S.fos, 0)} MPa (allowable = yield ÷ FoS)</span><span>· peak ${fmt(m.sig, 0)} MPa · yellow means fully used</span>`;
+    const c = $('cbar').getContext('2d'); for (let i = 0; i < 160; i++) { const [r, gg, b] = colormap(i / 159); c.fillStyle = `rgb(${r},${gg},${b})`; c.fillRect(i, 0, 1, 10); }
+  } else if (S.view === 'deform' && m) L.innerHTML = `<span>Deflected shape, exaggerated. Real deflection at the load: <b class="mono">${fmt(m.defl, 3)} mm</b></span>`;
+  else if (S.view === 'thin' && m) L.innerHTML = `<span>Red: material narrower than ${fmt(S.minW, 1)} mm · ${fmt(m.thinPct, 1)}% of the part</span>`;
+  else L.innerHTML = '';
+}
+
+// ---------------- interaction ----------------
+let drag = null;
+function toMM(ev) { const r = stage.getBoundingClientRect(); const px = ev.clientX - r.left, py = ev.clientY - r.top;
+  return [Math.max(0, Math.min(S.W, (px - view.ox) / view.s)), Math.max(0, Math.min(S.H, S.H - (py - view.oy) / view.s)), px, py]; }
+stage.addEventListener('pointerdown', (ev) => {
+  stage.setPointerCapture(ev.pointerId);
+  const [x, y, px, py] = toMM(ev); drag = { x0: x, y0: y, x1: x, y1: y, px, py, moved: false, preview: S.tool !== 'erase' };
+  draw();
+});
+stage.addEventListener('pointermove', (ev) => {
+  if (!drag) { const [x, y] = toMM(ev); $('tip').textContent = `x ${fmt(x, 1)} mm, y ${fmt(y, 1)} mm · ` + toolTip(); return; }
+  const [x, y, px, py] = toMM(ev); drag.x1 = x; drag.y1 = y; if (Math.hypot(px - drag.px, py - drag.py) > 6) drag.moved = true; draw();
+});
+stage.addEventListener('pointerup', (ev) => {
+  if (!drag) return; const d = drag; drag = null;
+  const snap = (v) => Math.round(v * 2) / 2;
+  if (S.tool === 'erase') { eraseAt(d.x0, d.y0); }
+  else if (S.tool === 'load') {
+    let fx = 0, fy = -1000;
+    if (d.moved) { const ang = Math.atan2(d.y1 - d.y0, d.x1 - d.x0), sn = Math.round(ang / (Math.PI / 12)) * (Math.PI / 12); fx = Math.round(1000 * Math.cos(sn)); fy = Math.round(1000 * Math.sin(sn)); }
+    S.features.push({ type: 'load', x: snap(d.x0), y: snap(d.y0), fx, fy });
+  } else if (S.tool === 'support') {
+    S.features.push({ type: 'fix', dof: S.supType, x0: snap(d.x0), y0: snap(d.y0), x1: snap(d.x1), y1: snap(d.y1) });
+  } else if (S.tool === 'void' || S.tool === 'solid') {
+    if (S.tool === 'void' && S.voidShape === 'circle') { const r = Math.hypot(d.x1 - d.x0, d.y1 - d.y0); if (r > 1) S.features.push({ type: 'void', shape: 'circle', cx: snap(d.x0), cy: snap(d.y0), r: snap(r) }); }
+    else if (Math.abs(d.x1 - d.x0) > 1 && Math.abs(d.y1 - d.y0) > 1) S.features.push({ type: S.tool, shape: 'rect', x0: snap(d.x0), y0: snap(d.y0), x1: snap(d.x1), y1: snap(d.y1) });
+  }
+  markDirty(); renderFeats(); draw();
+});
+stage.addEventListener('pointercancel', () => { drag = null; draw(); });
+function drawPreview(g) {
+  const d = drag, accent = css('--accent'); g.save(); g.strokeStyle = S.tool === 'load' ? css('--load') : accent; g.lineWidth = 1.5; g.setLineDash([4, 3]);
+  const [ax, ay] = P(d.x0, d.y0), [bx, by] = P(d.x1, d.y1);
+  if (S.tool === 'load') { g.beginPath(); g.arc(ax, ay, 5, 0, Math.PI * 2); g.stroke(); if (d.moved) { g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.stroke(); } }
+  else if (S.tool === 'void' && S.voidShape === 'circle') { g.beginPath(); g.arc(ax, ay, Math.hypot(bx - ax, by - ay), 0, Math.PI * 2); g.stroke(); }
+  else g.strokeRect(Math.min(ax, bx), Math.min(ay, by), Math.abs(bx - ax) || 2, Math.abs(by - ay) || 2);
+  g.restore();
+}
+function eraseAt(x, y) {
+  const tol = 12 / view.s;
+  for (let i = S.features.length - 1; i >= 0; i--) {
+    const f = S.features[i]; let hit = false;
+    if (f.type === 'load') hit = Math.hypot(f.x - x, f.y - y) < tol * 1.5;
+    else if (f.shape === 'circle') hit = Math.hypot(f.cx - x, f.cy - y) <= f.r + tol;
+    else hit = x >= Math.min(f.x0, f.x1) - tol && x <= Math.max(f.x0, f.x1) + tol && y >= Math.min(f.y0, f.y1) - tol && y <= Math.max(f.y0, f.y1) + tol;
+    if (hit) { S.features.splice(i, 1); return; }
+  }
+}
+function toolTip() {
+  return { support: 'Drag along an edge to hold it. Tap for a single bolt point.', load: 'Tap to place a 1 kN downward load, or drag to set its direction. Edit the value below.',
+    void: 'Drag to mark a zone that must stay empty (clearance, other parts).', solid: 'Drag to mark material that must stay (flanges, mounting faces).', erase: 'Tap a support, load or zone to remove it.' }[S.tool];
+}
+function setTool(t) { S.tool = t; document.querySelectorAll('#tools button').forEach(b => b.setAttribute('aria-pressed', b.dataset.tool === t)); $('suptype').style.display = t === 'support' ? '' : 'none'; $('voidshape').style.display = t === 'void' ? '' : 'none'; $('tip').textContent = toolTip(); }
+document.querySelectorAll('#tools button').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
+document.querySelectorAll('#views button').forEach(b => b.addEventListener('click', () => { S.view = b.dataset.view; document.querySelectorAll('#views button').forEach(c => c.setAttribute('aria-pressed', c === b)); draw(); }));
+$('suptype').addEventListener('change', e => S.supType = e.target.value);
+$('voidshape').addEventListener('change', e => S.voidShape = e.target.value);
+
+function renderFeats() {
+  const box = $('feats'); box.innerHTML = '';
+  let nl = 0, ns = 0, nv = 0, nk = 0;
+  S.features.forEach((f, i) => {
+    const row = document.createElement('div'); row.className = 'feat';
+    if (f.type === 'load') {
+      nl++; row.innerHTML = `<span class="tag load">Load ${nl}</span><span class="mono">at (${fmt(f.x, 1)}, ${fmt(f.y, 1)}) mm</span>
+        <label>Fx <input type="number" step="50" id="fx${i}" value="${f.fx}"></label><label>Fy <input type="number" step="50" id="fy${i}" value="${f.fy}"></label><span class="hint">N, +y up</span>`;
+      row.querySelector(`#fx${i}`).addEventListener('change', e => { f.fx = +e.target.value || 0; markDirty(); draw(); });
+      row.querySelector(`#fy${i}`).addEventListener('change', e => { f.fy = +e.target.value || 0; markDirty(); draw(); });
+    } else if (f.type === 'fix') {
+      ns++; row.innerHTML = `<span class="tag sup">Support ${ns}</span><select id="st${i}" aria-label="Support type"><option value="xy">Fixed (bolted)</option><option value="y">Slides horizontally</option><option value="x">Slides vertically</option></select>
+        <span class="mono">(${fmt(Math.min(f.x0, f.x1), 0)}, ${fmt(Math.min(f.y0, f.y1), 0)}) to (${fmt(Math.max(f.x0, f.x1), 0)}, ${fmt(Math.max(f.y0, f.y1), 0)}) mm</span>`;
+      const s = row.querySelector('select'); s.value = f.dof; s.addEventListener('change', e => { f.dof = e.target.value; markDirty(); draw(); });
+    } else if (f.type === 'void') { nv++; row.innerHTML = `<span class="tag">Keep-out ${nv}</span><span class="mono">${f.shape === 'circle' ? `Ø${fmt(2 * f.r, 1)} at (${fmt(f.cx, 1)}, ${fmt(f.cy, 1)})` : `${fmt(Math.abs(f.x1 - f.x0), 1)} × ${fmt(Math.abs(f.y1 - f.y0), 1)}`} mm</span>`; }
+    else { nk++; row.innerHTML = `<span class="tag">Keep-solid ${nk}</span><span class="mono">${fmt(Math.abs(f.x1 - f.x0), 1)} × ${fmt(Math.abs(f.y1 - f.y0), 1)} mm</span>`; }
+    const x = document.createElement('button'); x.className = 'x'; x.setAttribute('aria-label', 'Remove'); x.textContent = '×';
+    x.addEventListener('click', () => { S.features.splice(i, 1); markDirty(); renderFeats(); draw(); }); row.appendChild(x);
+    box.appendChild(row);
+  });
+}
+function markDirty() { if (Object.keys(S.results).length) { S.dirty = true; $('go').classList.add('stale'); $('go').textContent = 'Regenerate designs'; showBanner('Setup changed. The designs shown are from the previous setup. Press Regenerate designs to update them.'); } }
+function showBanner(msg, err) { const b = $('banner'); b.textContent = msg; b.className = 'banner' + (msg ? ' show' : '') + (err ? ' err' : ''); }
+
+// ---------------- gallery / summary / detail ----------------
+function buildGallery() {
+  const gal = $('gallery'); gal.innerHTML = '';
+  const items = [{ id: 'base', name: 'Solid plate (reference)' }, ...VARIANTS.map(v => ({ id: v.id, name: v.name }))];
+  for (const it of items) {
+    const b = document.createElement('button'); b.className = 'card'; b.id = 'card-' + it.id; b.setAttribute('aria-pressed', it.id === S.selected);
+    b.innerHTML = `<canvas width="${S.lastDisc.nelx}" height="${S.lastDisc.nely}"></canvas><div class="head"><span class="letter">${it.id === 'base' ? '◻' : it.id}</span><span class="name">${it.name}</span></div>
+      <div class="chips"></div><div class="stats"></div><div class="bar"><i></i></div>`;
+    b.addEventListener('click', () => { S.selected = it.id; document.querySelectorAll('.card').forEach(c => c.setAttribute('aria-pressed', c === b)); renderDetail(); draw(); });
+    gal.appendChild(b); updateCard(it.id);
+  }
+}
+function updateCard(id) {
+  const c = $('card-' + id), R = S.results[id]; if (!c || !R) return;
+  const cv = c.querySelector('canvas'), g = cv.getContext('2d');
+  g.fillStyle = css('--paper'); g.fillRect(0, 0, cv.width, cv.height);
+  if (R.x) g.drawImage(fieldImage(R, R.ev ? 'shape' : 'live'), 0, 0);
+  const bar = c.querySelector('.bar i');
+  bar.style.width = (R.status === 'done' ? 100 : Math.min(98, R.it / 110 * 100)) + '%';
+  c.querySelector('.bar').style.visibility = R.status === 'done' ? 'hidden' : 'visible';
+  const st = c.querySelector('.stats'), ch = c.querySelector('.chips'), m = metrics(R);
+  if (R.status === 'error') { ch.innerHTML = `<span class="chip bad">Solver error</span>`; return; }
+  if (!m) { st.innerHTML = `<span>${R.status === 'queued' ? 'Waiting' : 'Iteration ' + R.it}</span>`; ch.innerHTML = ''; return; }
+  st.innerHTML = `<span>Mass</span><b>${fmt(m.mass, m.mass < 100 ? 1 : 0)} g</b><span>Plate</span><b>${fmt(m.t, 1)} mm</b><span>FoS</span><b>${fmt(m.fos, 2)}</b><span>δ load</span><b>${fmt(m.defl, 3)} mm</b>`;
+  const rec = recommended();
+  ch.innerHTML = (id === rec ? '<span class="chip rec">Recommended</span>' : '') + (m.pass ? '<span class="chip ok">Meets spec</span>' : '<span class="chip bad">Fails spec</span>')
+    + (R.ev.brokenLoads ? '<span class="chip bad">Load not carried</span>' : '') + (m.thinPct > 5 ? '<span class="chip warn">Thin webs</span>' : '');
+}
+function renderSummary() {
+  const r = S.run; if (!r) return;
+  const prog = VARIANTS.reduce((a, v) => a + (S.results[v.id].status === 'done' ? 110 : S.results[v.id].it), 0) / (VARIANTS.length * 110);
+  $('prog').style.width = (r.done === r.total ? 100 : prog * 100) + '%';
+  if (r.done < r.total) { $('verdict').textContent = `Growing ${VARIANTS.length} designs from your load case…`; $('verdictSub').textContent = `${r.done} of ${r.total} finished. Watch them form on the board and in the cards below.`; return; }
+  const rec = recommended(), M = MATERIALS[S.mat], mb = metrics(S.results.base);
+  const secs = ((r.finished - r.started) / 1000).toFixed(0);
+  if (!rec) { $('verdict').textContent = 'No design meets the requirements at the chosen thickness.'; $('verdictSub').textContent = S.autoT ? 'Check the load path: every load needs material connecting it to a support.' : 'Turn on thickness sizing, or raise the plate thickness.'; return; }
+  const m = metrics(S.results[rec]), v = VARIANTS.find(x => x.id === rec);
+  $('verdict').innerHTML = `Recommended: <span style="color:var(--accent)">${rec} · ${v.name}</span>, ${fmt(m.t, 1)} mm ${M.name}, <span class="num">${fmt(m.mass, m.mass < 100 ? 1 : 0)} g</span>`;
+  const save = mb ? (1 - m.mass / mb.mass) * 100 : 0;
+  $('verdictSub').textContent = `Factor of safety ${fmt(m.fos, 2)}, deflection at the load ${fmt(m.defl, 3)} mm. ${save > 0 ? fmt(save, 0) + '% lighter than a solid plate sized to the same requirement (' + fmt(mb.mass, 0) + ' g at ' + fmt(mb.t, 1) + ' mm).' : ''} Solved in ${secs} s.`;
+  if (m.webWarn) { const b = document.createElement('button'); b.className = 'btn'; b.style.marginLeft = '8px'; b.textContent = `Make webs at least ${fmt(m.t, 1)} mm (plate thickness) and regenerate`;
+    b.addEventListener('click', () => { S.minW = m.t; S.proc = 'custom'; syncInputs(); startRun(); }); $('verdictSub').append(' For cut plate, webs thinner than the plate are hard to cut cleanly.', b); }
+}
+function renderDetail() {
+  const R = S.results[S.selected], m = metrics(R), tb = $('metrics');
+  const v = VARIANTS.find(x => x.id === S.selected);
+  $('dtitle').textContent = S.selected === 'base' ? 'Solid plate (reference)' : `Design ${S.selected} · ${v.name}`;
+  if (!m) { tb.innerHTML = `<tr><td>Status</td><td>${R ? (R.status === 'running' ? 'Optimizing, iteration ' + R.it : R.status) : 'Not run'}</td></tr>`; return; }
+  const M = MATERIALS[S.mat], d = S.lastDisc;
+  const rows = [
+    ['Plate thickness', `${fmt(m.t, 1)} mm` + (S.autoT ? ` (needs ${fmt(m.tReq, 2)})` : '')],
+    ['Mass', `${fmt(m.mass, 1)} g`],
+    ['Material area', `${fmt(m.area, 0)} mm²`],
+    ['Peak von Mises stress', `${fmt(m.sig, 1)} MPa`],
+    ['Factor of safety on yield', `${fmt(m.fos, 2)} (target ${fmt(S.fos, 2)})`],
+    ['Deflection at load', `${fmt(m.defl, 4)} mm`],
+    ['Max deflection anywhere', `${fmt(m.dmax, 4)} mm`],
+    ['Stiffness at load', `${fmt(m.stiff / 1000, 2)} kN/mm`],
+    ['Through-holes', `${m.holes}`],
+    ['Material below min width', `${fmt(m.thinPct, 1)} %`],
+  ];
+  if (R.ev.added) rows.push(['Added to widen thin webs', `${fmt(m.added, 0)} mm²`]);
+  if (R.distinct !== undefined) rows.push(['Distinct from the other designs', `${fmt(R.distinct, 0)} %`]);
+  if (R.it) rows.push(['Optimizer iterations', `${R.it}`]);
+  rows.push(['Mesh', `${d.nelx} × ${d.nely}, ${fmt(d.h, 2)} mm elements`]);
+  tb.innerHTML = rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('') +
+    (m.webWarn ? `<tr><td colspan="2" style="text-align:left;color:var(--warn);font-family:var(--font-body)">For cut plate, keep webs at least as wide as the plate is thick (${fmt(m.t, 1)} mm). Raise Min member width to ${fmt(m.t, 1)} and regenerate.</td></tr>` : '') +
+    (R.ev.brokenLoads ? `<tr><td colspan="2" style="text-align:left;color:var(--bad);font-family:var(--font-body)">A load is not connected to material. Try a more robust variant or add a keep-solid zone at the load.</td></tr>` : '');
+}
+function renderPareto() {
+  const svg = $('pareto'), pts = [];
+  for (const id of ['base', ...VARIANTS.map(v => v.id)]) { const m = metrics(S.results[id]); if (m) pts.push({ id, m }); }
+  if (pts.length < 2) { svg.innerHTML = `<text x="210" y="130" text-anchor="middle" fill="var(--muted)" font-size="13">Appears when the designs finish.</text>`; return; }
+  const W = 420, H = 260, L = 58, Rm = 16, T = 14, B = 44;
+  const xs = pts.map(p => p.m.mass), ys = pts.map(p => p.m.defl);
+  const nice = (lo, hi) => { const span = hi - lo || hi || 1; const st = Math.pow(10, Math.floor(Math.log10(span / 4))); const s2 = [1, 2, 5, 10].map(k => k * st).find(k => span / k <= 5); return [Math.floor(lo / s2) * s2, Math.ceil(hi / s2) * s2, s2]; };
+  const [x0, x1, xs2] = nice(Math.min(...xs) * 0.95, Math.max(...xs) * 1.05), [y0, y1, ys2] = nice(Math.min(...ys) * 0.9, Math.max(...ys) * 1.08);
+  const X = v => L + (v - x0) / (x1 - x0) * (W - L - Rm), Y = v => H - B - (v - y0) / (y1 - y0) * (H - T - B);
+  let s = '';
+  for (let v = x0; v <= x1 + 1e-9; v += xs2) s += `<line x1="${X(v)}" x2="${X(v)}" y1="${T}" y2="${H - B}" stroke="var(--grid)"/><text x="${X(v)}" y="${H - B + 16}" text-anchor="middle" font-size="11" fill="var(--muted)" font-family="var(--font-mono)">${+v.toPrecision(4)}</text>`;
+  for (let v = y0; v <= y1 + 1e-12; v += ys2) s += `<line x1="${L}" x2="${W - Rm}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--grid)"/><text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end" font-size="11" fill="var(--muted)" font-family="var(--font-mono)">${+v.toPrecision(3)}</text>`;
+  s += `<line x1="${L}" x2="${W - Rm}" y1="${H - B}" y2="${H - B}" stroke="var(--muted)"/><line x1="${L}" x2="${L}" y1="${T}" y2="${H - B}" stroke="var(--muted)"/>`;
+  s += `<text x="${(L + W - Rm) / 2}" y="${H - 8}" text-anchor="middle" font-size="12" fill="var(--ink)">Mass (g)</text>`;
+  s += `<text transform="translate(14 ${(T + H - B) / 2}) rotate(-90)" text-anchor="middle" font-size="12" fill="var(--ink)">Deflection at load (mm)</text>`;
+  const rec = recommended(), placed = [];
+  for (const p of pts) {
+    const cx = X(p.m.mass), cy = Y(p.m.defl), sel = p.id === S.selected, isRec = p.id === rec;
+    const col = p.m.pass ? 'var(--accent)' : 'var(--bad)';
+    s += p.id === 'base' ? `<rect x="${cx - 5}" y="${cy - 5}" width="10" height="10" fill="none" stroke="var(--muted)" stroke-width="1.5"/>`
+      : `<circle cx="${cx}" cy="${cy}" r="${isRec ? 7 : 5}" fill="${isRec ? col : 'var(--paper)'}" stroke="${col}" stroke-width="2"/>`;
+    if (sel) s += `<circle cx="${cx}" cy="${cy}" r="11" fill="none" stroke="var(--ink)" stroke-dasharray="2 2"/>`;
+    const offs = [[9, -8], [9, 13], [-19, -8], [-19, 13], [-5, -14], [-5, 24]];
+    let lx = cx + 9, ly = cy - 8;
+    for (const [dx, dy] of offs) { const X0 = cx + dx, Y0 = cy + dy;
+      if (!placed.some(q => Math.abs(q[0] - X0) < 14 && Math.abs(q[1] - Y0) < 12) && !pts.some(o => Math.hypot(X(o.m.mass) - X0 - 4, Y(o.m.defl) - Y0 + 4) < 7)) { lx = X0; ly = Y0; break; } }
+    placed.push([lx, ly]);
+    s += `<text x="${lx}" y="${ly}" font-size="12" font-weight="600" fill="var(--ink)" font-family="var(--font-display)">${p.id === 'base' ? 'Solid' : p.id}</text>`;
+  }
+  svg.innerHTML = s;
+}
+function renderAll() {
+  for (const id of Object.keys(S.results)) updateCard(id);
+  renderSummary(); renderDetail(); renderPareto(); draw();
+}
+
+// ---------------- geometry export ----------------
+function contours(R) {
+  const d = S.lastDisc, nelx = d.nelx, nely = d.nely, sol = R.ev.solid;
+  // light 3x3 blur of the 0/1 layout, then nodal averages, then marching squares at 0.5
+  const b = new Float32Array(nelx * nely);
+  for (let ix = 0; ix < nelx; ix++) for (let iy = 0; iy < nely; iy++) {
+    let s = 0, n = 0; for (let a = -1; a <= 1; a++) for (let c = -1; c <= 1; c++) { const jx = ix + a, jy = iy + c; if (jx >= 0 && jy >= 0 && jx < nelx && jy < nely) { s += sol[jx * nely + jy] * (a === 0 && c === 0 ? 4 : 1); n += (a === 0 && c === 0 ? 4 : 1); } }
+    b[ix * nely + iy] = s / n;
+  }
+  const NX = nelx + 3, NY = nely + 3, v = new Float32Array(NX * NY);
+  for (let i = 0; i <= nelx; i++) for (let j = 0; j <= nely; j++) {
+    let s = 0, n = 0; for (const [a, c] of [[-1, -1], [0, -1], [-1, 0], [0, 0]]) { const ex = i + a, ey = j + c; if (ex >= 0 && ey >= 0 && ex < nelx && ey < nely) { s += b[ex * nely + ey]; n++; } }
+    v[(j + 1) * NX + (i + 1)] = n ? s / n : 0;
+  }
+  const pos = (i, j) => [Math.max(0, Math.min(S.W, (i - 1) * d.hx)), Math.max(0, Math.min(S.H, S.H - (j - 1) * d.hy))];
+  const t = 0.5, pts = new Map();
+  const ekey = (i, j, dir) => (j * NX + i) * 2 + dir;
+  const cross = (k) => { if (pts.has(k)) return; const dir = k & 1, n = k >> 1, i = n % NX, j = Math.floor(n / NX);
+    const a = v[j * NX + i], bb = dir ? v[(j + 1) * NX + i] : v[j * NX + i + 1], f = (t - a) / (bb - a);
+    const [x0, y0] = pos(i, j), [x1, y1] = dir ? pos(i, j + 1) : pos(i + 1, j); pts.set(k, [x0 + (x1 - x0) * f, y0 + (y1 - y0) * f]); };
+  const adj = new Map(); const link = (p, q) => { cross(p); cross(q); (adj.get(p) || adj.set(p, []).get(p)).push(q); (adj.get(q) || adj.set(q, []).get(q)).push(p); };
+  for (let j = 0; j < NY - 1; j++) for (let i = 0; i < NX - 1; i++) {
+    const c0 = v[j * NX + i] > t, c1 = v[j * NX + i + 1] > t, c2 = v[(j + 1) * NX + i + 1] > t, c3 = v[(j + 1) * NX + i] > t;
+    const T = ekey(i, j, 0), Rr = ekey(i + 1, j, 1), Bm = ekey(i, j + 1, 0), Lf = ekey(i, j, 1);
+    const cr = []; if (c0 !== c1) cr.push(T); if (c1 !== c2) cr.push(Rr); if (c3 !== c2) cr.push(Bm); if (c0 !== c3) cr.push(Lf);
+    if (cr.length === 2) link(cr[0], cr[1]);
+    else if (cr.length === 4) {
+      const ctr = (v[j * NX + i] + v[j * NX + i + 1] + v[(j + 1) * NX + i + 1] + v[(j + 1) * NX + i]) / 4 > t;
+      const cut = [[c0, Lf, T], [c1, T, Rr], [c2, Rr, Bm], [c3, Bm, Lf]];
+      for (const [c, p, q] of cut) if (c !== ctr) link(p, q);
+    }
+  }
+  const used = new Set(), loops = [];
+  for (const start of adj.keys()) {
+    if (used.has(start)) continue; const loop = []; let prev = -1, cur = start;
+    while (cur !== undefined && !used.has(cur)) { used.add(cur); loop.push(pts.get(cur)); const nb = adj.get(cur); const nx = nb.find(q => q !== prev && !used.has(q)); prev = cur; cur = nx; }
+    if (loop.length > 2) loops.push(simplify(loop, 0.12 * d.h));
+  }
+  return loops;
+}
+function simplify(pts, tol) {
+  if (pts.length < 5) return pts;
+  const keep = new Uint8Array(pts.length); keep[0] = keep[pts.length - 1] = 1;
+  const st = [[0, pts.length - 1]];
+  while (st.length) { const [a, b] = st.pop(); let md = 0, mi = -1; const [ax, ay] = pts[a], [bx, by] = pts[b], L = Math.hypot(bx - ax, by - ay) || 1e-12;
+    for (let i = a + 1; i < b; i++) { const dd = Math.abs((bx - ax) * (ay - pts[i][1]) - (ax - pts[i][0]) * (by - ay)) / L; if (dd > md) { md = dd; mi = i; } }
+    if (md > tol) { keep[mi] = 1; st.push([a, mi], [mi, b]); } }
+  return pts.filter((_, i) => keep[i]);
+}
+function makeDXF(loops) {
+  const L = ['0', 'SECTION', '2', 'HEADER', '9', '$INSUNITS', '70', '4', '9', '$EXTMIN', '10', '0', '20', '0', '9', '$EXTMAX', '10', String(S.W), '20', String(S.H), '0', 'ENDSEC',
+    '0', 'SECTION', '2', 'TABLES', '0', 'TABLE', '2', 'LAYER', '70', '1', '0', 'LAYER', '2', 'PROFILE', '70', '0', '62', '7', '6', 'CONTINUOUS', '0', 'ENDTAB', '0', 'ENDSEC',
+    '0', 'SECTION', '2', 'ENTITIES'];
+  for (const lp of loops) {
+    L.push('0', 'POLYLINE', '8', 'PROFILE', '66', '1', '70', '1');
+    for (const [x, y] of lp) L.push('0', 'VERTEX', '8', 'PROFILE', '10', x.toFixed(4), '20', y.toFixed(4));
+    L.push('0', 'SEQEND', '8', 'PROFILE');
+  }
+  L.push('0', 'ENDSEC', '0', 'EOF');
+  return L.join('\r\n') + '\r\n';
+}
+function makeSVG(loops, m) {
+  const d = loops.map(lp => 'M' + lp.map(([x, y]) => `${x.toFixed(3)} ${(S.H - y).toFixed(3)}`).join(' L') + ' Z').join(' ');
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${S.W}mm" height="${S.H}mm" viewBox="0 0 ${S.W} ${S.H}">\n<title>Morphe design ${S.selected}, ${m ? fmt(m.t, 1) + ' mm ' + MATERIALS[S.mat].name : ''}</title>\n<path d="${d}" fill="#000" fill-rule="evenodd"/>\n</svg>\n`;
+}
+function makeCSV() {
+  const M = MATERIALS[S.mat];
+  const head = ['design', 'name', 'meets_spec', 'plate_thickness_mm', 'required_thickness_mm', 'mass_g', 'area_mm2', 'peak_von_mises_MPa', 'factor_of_safety', 'deflection_at_load_mm', 'max_deflection_mm', 'stiffness_N_per_mm', 'holes', 'below_min_width_pct', 'distinct_pct'];
+  const rows = [head.join(',')];
+  for (const id of ['base', ...VARIANTS.map(v => v.id)]) { const R = S.results[id], m = metrics(R); if (!m) continue;
+    const name = id === 'base' ? 'Solid plate' : VARIANTS.find(v => v.id === id).name;
+    rows.push([id, `"${name}"`, m.pass, m.t, m.tReq.toFixed(3), m.mass.toFixed(2), m.area.toFixed(1), m.sig.toFixed(2), m.fos.toFixed(3), m.defl.toFixed(5), m.dmax.toFixed(5), m.stiff.toFixed(1), m.holes, m.thinPct.toFixed(2), R.distinct !== undefined ? R.distinct.toFixed(1) : ''].join(',')); }
+  rows.push('', `# material,"${M.name}",E_MPa,${M.E},yield_MPa,${M.Sy},density_kg_m3,${M.rho}`, `# target_FoS,${S.fos},deflection_limit_mm,${S.dlim || 'none'},min_member_width_mm,${S.minW}`, `# design_space_mm,${S.W},${S.H}`);
+  return rows.join('\n') + '\n';
+}
+function projectJSON() { return JSON.stringify({ tool: 'Morphe Design Studio', version: 1, W: S.W, H: S.H, material: S.mat, process: S.proc, minWidth: S.minW, fos: S.fos, deflLimit: S.dlim, symmetric: S.sym, features: S.features }, null, 2); }
+
+// zip (stored, no compression)
+const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(u8) { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC[(c ^ u8[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+function zip(files) {
+  const enc = new TextEncoder(), parts = [], central = []; let off = 0;
+  for (const f of files) {
+    const name = enc.encode(f.name), data = typeof f.data === 'string' ? enc.encode(f.data) : f.data, crc = crc32(data);
+    const h = new DataView(new ArrayBuffer(30));
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint16(8, 0, true); h.setUint16(10, 0, true); h.setUint16(12, 0x21, true);
+    h.setUint32(14, crc, true); h.setUint32(18, data.length, true); h.setUint32(22, data.length, true); h.setUint16(26, name.length, true); h.setUint16(28, 0, true);
+    parts.push(new Uint8Array(h.buffer), name, data);
+    const c = new DataView(new ArrayBuffer(46));
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true); c.setUint16(10, 0, true); c.setUint16(12, 0, true); c.setUint16(14, 0x21, true);
+    c.setUint32(16, crc, true); c.setUint32(20, data.length, true); c.setUint32(24, data.length, true); c.setUint16(28, name.length, true); c.setUint32(42, off, true);
+    central.push(new Uint8Array(c.buffer), name);
+    off += 30 + name.length + data.length;
+  }
+  const cdSize = central.reduce((a, p) => a + p.length, 0);
+  const e = new DataView(new ArrayBuffer(22)); e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true); e.setUint32(12, cdSize, true); e.setUint32(16, off, true);
+  return new Blob([...parts, ...central, new Uint8Array(e.buffer)], { type: 'application/zip' });
+}
+async function saveFile(filename, data) {
+  let dl = null;
+  try { if (window.claude && window.claude.use) dl = await window.claude.use('downloads'); } catch (e) { dl = null; }
+  if (dl) {
+    try { await dl.save({ filename, data }); toast('Saved ' + filename); }
+    catch (err) { if (err && err.code === 'declined') return; toast('Download not available here: ' + (err && err.message || 'unknown reason')); }
+    return;
+  }
+  const blob = data instanceof Blob ? data : new Blob([data]);
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+function ready() { const R = S.results[S.selected]; if (!R || !R.ev) { toast('Wait for this design to finish.'); return null; } return R; }
+const baseName = () => `morphe_${S.preset}_${S.selected === 'base' ? 'solid' : S.selected}`;
+$('exZip').addEventListener('click', () => { const R = ready(); if (!R) return; const lp = contours(R), m = metrics(R);
+  saveFile(baseName() + '.zip', zip([{ name: baseName() + '.dxf', data: makeDXF(lp) }, { name: baseName() + '.svg', data: makeSVG(lp, m) }, { name: 'morphe_report.csv', data: makeCSV() }, { name: 'morphe_project.json', data: projectJSON() }])); });
+$('exSvg').addEventListener('click', () => { const R = ready(); if (!R) return; saveFile(baseName() + '.svg', makeSVG(contours(R), metrics(R))); });
+$('exCsv').addEventListener('click', () => { if (!S.results.base || !S.results.base.ev) { toast('Wait for the designs to finish.'); return; } saveFile('morphe_report.csv', makeCSV()); });
+$('exPng').addEventListener('click', () => stage.toBlob(b => saveFile(baseName() + '_' + S.view + '.png', b)));
+$('exCopy').addEventListener('click', async () => { const R = ready(); if (!R) return; try { await navigator.clipboard.writeText(makeDXF(contours(R))); toast('DXF copied. Paste into a text file and save it as .dxf'); } catch (e) { toast('Clipboard blocked by the browser.'); } });
+
+// ---------------- inputs ----------------
+function syncInputs() {
+  $('preset').value = S.preset; $('W').value = S.W; $('H').value = S.H; $('res').value = S.res; $('sym').checked = S.sym;
+  $('mat').value = S.mat; $('proc').value = S.proc; $('minw').value = S.minW; $('fos').value = S.fos; $('dlim').value = S.dlim;
+  $('autot').checked = S.autoT; $('tfix').value = S.tFix; $('tfix').disabled = S.autoT;
+  $('thint').textContent = S.autoT ? 'Thickness is picked per design so each one just meets the requirements.' : 'Every design is checked at this thickness.';
+  renderFeats();
+}
+function initInputs() {
+  $('mat').innerHTML = Object.entries(MATERIALS).map(([k, m]) => `<option value="${k}">${m.name} · E ${fmt(m.E / 1000, 1)} GPa · Sy ${m.Sy} MPa</option>`).join('');
+  $('proc').innerHTML = Object.entries(PROCESSES).map(([k, p]) => `<option value="${k}">${p.name}</option>`).join('');
+  $('preset').addEventListener('change', e => applyPreset(e.target.value));
+  const geo = (id, key, f = Number) => $(id).addEventListener('change', e => { const v = f(e.target.value); if (key === 'W' || key === 'H') { if (!(v >= 10)) { syncInputs(); return; } } S[key] = v; markDirty(); syncInputs(); draw(); });
+  geo('W', 'W'); geo('H', 'H'); geo('res', 'res', String);
+  $('sym').addEventListener('change', e => { S.sym = e.target.checked; markDirty(); });
+  $('minw').addEventListener('change', e => { S.minW = Math.max(0.5, +e.target.value || 1); S.proc = 'custom'; syncInputs(); markDirty(); });
+  $('proc').addEventListener('change', e => { S.proc = e.target.value; const p = PROCESSES[S.proc]; if (p.minW) S.minW = p.minW; syncInputs(); markDirty(); });
+  const live = (id, key, f) => $(id).addEventListener('change', e => { S[key] = f(e.target); syncInputs(); renderAll(); });
+  live('mat', 'mat', t => t.value); live('fos', 'fos', t => Math.max(1, +t.value || 1)); live('dlim', 'dlim', t => Math.max(0, +t.value || 0));
+  live('autot', 'autoT', t => t.checked); live('tfix', 'tFix', t => Math.max(0.5, +t.value || 1));
+  $('go').addEventListener('click', startRun);
+}
+window.addEventListener('resize', () => draw());
+if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => renderAll());
+
+initInputs(); setTool('load');
+applyPreset('cantilever');
+S.dirty = false;
+startRun();
+
+</script>
+</body>
+</html>
