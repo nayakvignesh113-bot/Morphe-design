@@ -136,7 +136,7 @@ function applyH(flt, v, out) { // out = H v  (H symmetric)
 }
 
 // Plane-stress element stress at centroid. Returns von Mises.
-function elementVM(mesh, u, nu, E, h, e) {
+function elementVM(mesh, u, nu, E, h, e, out) {
   const o = e*8, ed = mesh.edof;
   const dx = [-1, 1, 1, -1], dy = [-1, -1, 1, 1];
   let ex = 0, ey = 0, g = 0;
@@ -147,7 +147,102 @@ function elementVM(mesh, u, nu, E, h, e) {
   ex /= 2*h; ey /= 2*h; g /= 2*h;
   const c = E / (1 - nu*nu);
   const sx = c*(ex + nu*ey), sy = c*(nu*ex + ey), txy = c*(1-nu)/2*g;
+  if (out) { out[0] = sx; out[1] = sy; out[2] = txy; }
   return Math.sqrt(sx*sx - sx*sy + sy*sy + 3*txy*txy);
+}
+
+// ---------- out-of-plane plate buckling (linear eigenvalue) ----------
+// ACM rectangular plate element (12 dof: w, w_x, w_y per node), integrated with 4x4 Gauss.
+function solveDense(A, n) { // returns inverse of n x n (row-major) by Gauss-Jordan with partial pivoting
+  const M = new Float64Array(n * 2 * n);
+  for (let i = 0; i < n; i++) { for (let j = 0; j < n; j++) M[i*2*n + j] = A[i*n + j]; M[i*2*n + n + i] = 1; }
+  for (let c = 0; c < n; c++) {
+    let pr = c; for (let r = c+1; r < n; r++) if (Math.abs(M[r*2*n + c]) > Math.abs(M[pr*2*n + c])) pr = r;
+    if (pr !== c) for (let k = 0; k < 2*n; k++) { const t = M[c*2*n + k]; M[c*2*n + k] = M[pr*2*n + k]; M[pr*2*n + k] = t; }
+    const d = M[c*2*n + c];
+    for (let k = 0; k < 2*n; k++) M[c*2*n + k] /= d;
+    for (let r = 0; r < n; r++) if (r !== c) { const f = M[r*2*n + c]; if (f) for (let k = 0; k < 2*n; k++) M[r*2*n + k] -= f * M[c*2*n + k]; }
+  }
+  const inv = new Float64Array(n*n); for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) inv[i*n + j] = M[i*2*n + n + j];
+  return inv;
+}
+function makePlateKE(nu, h) {
+  const a = h / 2, nodes = [[-a, -a], [a, -a], [a, a], [-a, a]]; // LL, LR, UR, UL
+  const P = (x, y) => [1, x, y, x*x, x*y, y*y, x*x*x, x*x*y, x*y*y, y*y*y, x*x*x*y, x*y*y*y];
+  const Px = (x, y) => [0, 1, 0, 2*x, y, 0, 3*x*x, 2*x*y, y*y, 0, 3*x*x*y, y*y*y];
+  const Py = (x, y) => [0, 0, 1, 0, x, 2*y, 0, x*x, 2*x*y, 3*y*y, x*x*x, 3*x*y*y];
+  const Pxx = (x, y) => [0, 0, 0, 2, 0, 0, 6*x, 2*y, 0, 0, 6*x*y, 0];
+  const Pyy = (x, y) => [0, 0, 0, 0, 0, 2, 0, 0, 2*x, 6*y, 0, 6*x*y];
+  const Pxy = (x, y) => [0, 0, 0, 0, 1, 0, 0, 2*x, 2*y, 0, 3*x*x, 3*y*y];
+  const C = new Float64Array(144);
+  nodes.forEach(([x, y], k) => { const r = [P(x, y), Px(x, y), Py(x, y)]; for (let q = 0; q < 3; q++) for (let j = 0; j < 12; j++) C[(3*k + q)*12 + j] = r[q][j]; });
+  const Ci = solveDense(C, 12);
+  const mulCi = (row) => { const o = new Float64Array(12); for (let j = 0; j < 12; j++) { let s = 0; for (let k = 0; k < 12; k++) s += row[k] * Ci[k*12 + j]; o[j] = s; } return o; };
+  const gp = [-0.8611363115940526, -0.3399810435848563, 0.3399810435848563, 0.8611363115940526];
+  const gw = [0.3478548451374538, 0.6521451548625461, 0.6521451548625461, 0.3478548451374538];
+  const Db = 1 / (12 * (1 - nu*nu)); // E = 1, t = 1
+  const Kb = new Float64Array(144), Kgx = new Float64Array(144), Kgy = new Float64Array(144), Kgxy = new Float64Array(144);
+  for (let gi = 0; gi < 4; gi++) for (let gj = 0; gj < 4; gj++) {
+    const x = gp[gi]*a, y = gp[gj]*a, w = gw[gi]*gw[gj]*a*a;
+    const bxx = mulCi(Pxx(x, y)), byy = mulCi(Pyy(x, y)), bxy = mulCi(Pxy(x, y)), gx = mulCi(Px(x, y)), gy = mulCi(Py(x, y));
+    for (let i = 0; i < 12; i++) for (let j = 0; j < 12; j++) {
+      Kb[i*12 + j] += w * Db * (bxx[i]*bxx[j] + byy[i]*byy[j] + nu*(bxx[i]*byy[j] + byy[i]*bxx[j]) + 2*(1 - nu)*bxy[i]*bxy[j]);
+      Kgx[i*12 + j] += w * gx[i]*gx[j]; Kgy[i*12 + j] += w * gy[i]*gy[j]; Kgxy[i*12 + j] += w * (gx[i]*gy[j] + gy[i]*gx[j]);
+    }
+  }
+  return { Kb, Kgx, Kgy, Kgxy };
+}
+/* Smallest positive load factor lambda with (Kb + lambda Kg) phi = 0, for E = 1, t = 1 and membrane stresses S (for t = 1).
+   Scales as lambda(E, t) = lambdaHat * E * t^3. wfix: Uint8Array(3*nn) of restrained plate dofs. */
+function buckle(mesh, nu, h, solid, S, wfix) {
+  const { nel, nn } = mesh, ndof = 3*nn;
+  const ed = new Int32Array(nel*12); let bw = 0;
+  for (let e = 0; e < nel; e++) { let lo = Infinity, hi = -Infinity;
+    for (let k = 0; k < 4; k++) { const n = mesh.edof[e*8 + 2*k] >> 1; for (let q = 0; q < 3; q++) { const d = 3*n + q; ed[e*12 + 3*k + q] = d; lo = Math.min(lo, d); hi = Math.max(hi, d); } }
+    bw = Math.max(bw, hi - lo); }
+  const w = bw + 1, KE = makePlateKE(nu, h);
+  const Kb = new Float64Array(ndof*w), Kg = new Float64Array(ndof*w);
+  const ke = new Float64Array(144);
+  for (let e = 0; e < nel; e++) {
+    const sb = solid[e] ? 1 : 1e-6, sx = solid[e] ? S[3*e] : 0, sy = solid[e] ? S[3*e+1] : 0, txy = solid[e] ? S[3*e+2] : 0;
+    for (let k = 0; k < 144; k++) ke[k] = sx*KE.Kgx[k] + sy*KE.Kgy[k] + txy*KE.Kgxy[k];
+    for (let i = 0; i < 12; i++) { const gi = ed[e*12 + i];
+      for (let j = 0; j < 12; j++) { const gj = ed[e*12 + j]; if (gi < gj) continue;
+        const o = gi*w + (gj - gi + bw); Kb[o] += sb*KE.Kb[i*12 + j]; Kg[o] += ke[i*12 + j]; } }
+  }
+  const fx = new Uint8Array(ndof); for (let d = 0; d < ndof; d++) fx[d] = wfix[d];
+  const meshB = { ndof, bw };
+  applyFixed(Kb, meshB, fx);
+  for (let d = 0; d < ndof; d++) if (fx[d]) { for (let j = Math.max(0, d-bw); j <= d; j++) Kg[d*w + (j-d+bw)] = 0; for (let i = d+1; i <= Math.min(ndof-1, d+bw); i++) Kg[i*w + (d-i+bw)] = 0; }
+  const KbCopy = Float64Array.from(Kb);
+  cholBand(Kb, ndof, bw);
+  const mv = (A, x) => { const y = new Float64Array(ndof);
+    for (let i = 0; i < ndof; i++) { const r = i*w - i + bw; let s = A[r + i]*x[i];
+      for (let j = Math.max(0, i-bw); j < i; j++) { const v = A[r + j]; s += v*x[j]; y[j] += v*x[i]; } y[i] += s; } return y; };
+  const dot = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i]*b[i]; return s; };
+  // operator A x = Kb^-1 (-Kg) x has eigenvalues mu = 1/lambda; it is self-adjoint in the Kb inner product
+  const Aop = (x) => { const y = mv(Kg, x); for (let i = 0; i < ndof; i++) y[i] = -y[i]; return solveBand(Kb, ndof, bw, y); };
+  const rq = (x) => { const g = mv(Kg, x); return -dot(x, g) / dot(x, mv(KbCopy, x)); };
+  let seed = 12345; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5;
+  const power = (shift) => {
+    let x = new Float64Array(ndof); for (let i = 0; i < ndof; i++) x[i] = fx[i] ? 0 : rnd();
+    let mu = 0, prev = Infinity;
+    for (let it = 0; it < 500; it++) {
+      const y = Aop(x); if (shift) for (let i = 0; i < ndof; i++) y[i] += shift * x[i];
+      let nrm = 0; for (let i = 0; i < ndof; i++) nrm = Math.max(nrm, Math.abs(y[i]));
+      if (!(nrm > 0)) return { mu: 0, x };
+      for (let i = 0; i < ndof; i++) x[i] = y[i] / nrm;
+      if (it % 5 === 4) { mu = rq(x); if (Math.abs(mu - prev) <= 1e-7 * Math.abs(mu)) break; prev = mu; }
+    }
+    return { mu: rq(x), x };
+  };
+  let r = power(0);
+  if (r.mu < 0) { const s2 = -r.mu * 1.0001; r = power(s2); if (!(r.mu > 1e-9 * s2)) return { lam: Infinity, mode: null }; }
+  if (!(r.mu > 0)) return { lam: Infinity, mode: null };
+  const mode = new Float32Array(nn); let m = 0;
+  for (let n = 0; n < nn; n++) { mode[n] = r.x[3*n]; m = Math.max(m, Math.abs(mode[n])); }
+  if (m) for (let n = 0; n < nn; n++) mode[n] /= m;
+  return { lam: 1 / r.mu, mode };
 }
 
 const projT = (x, b, eta) => (Math.tanh(b*eta) + Math.tanh(b*(x-eta))) / (Math.tanh(b*eta) + Math.tanh(b*(1-eta)));
@@ -325,10 +420,12 @@ function evaluate(job, field, h) {
   const U = feSolve(mesh, KE, Ev, job.F, job.fixed);
   const vm = new Float32Array(nel);
   let vmMax = 0, vmMaxAll = 0, vmEl = -1, nSolid = 0;
+  const Sig = new Float64Array(3*nel), tmp3 = [0, 0, 0];
   for (let e = 0; e < nel; e++) {
     if (!solid[e]) continue;
     nSolid++;
-    const s = elementVM(mesh, U, nu, 1, h, e); vm[e] = s;
+    const s = elementVM(mesh, U, nu, 1, h, e, tmp3); vm[e] = s;
+    Sig[3*e] = tmp3[0]; Sig[3*e+1] = tmp3[1]; Sig[3*e+2] = tmp3[2];
     vmMaxAll = Math.max(vmMaxAll, s);
     let atLoad = false;
     for (let a = 0; a < 4; a++) if (loadNode[mesh.edof[e*8+2*a] >> 1]) atLoad = true;
@@ -355,8 +452,16 @@ function evaluate(job, field, h) {
     const op = morphOpen(nelx, nely, solid, rW);
     for (let e = 0; e < nel; e++) if (solid[e] && !op[e] && passive[e] !== 2) { thin[e] = 1; thinCount++; }
   }
+  // buckling: bolted (fully fixed) nodes are clamped out of plane; sliding supports are simply supported
+  let lamB = Infinity, modeB = null;
+  if (job.buckling !== false) {
+    const wfix = new Uint8Array(3*mesh.nn);
+    for (let n = 0; n < mesh.nn; n++) { const fxx = job.fixed[2*n], fyy = job.fixed[2*n+1];
+      if (fxx || fyy) wfix[3*n] = 1; if (fxx && fyy) { wfix[3*n+1] = 1; wfix[3*n+2] = 1; } }
+    const bk = buckle(mesh, nu, h, solid, Sig, wfix); lamB = bk.lam; modeB = bk.mode;
+  }
   const U32 = new Float32Array(U);
-  return { added, filled, solid, vm, vmMax, vmMaxAll, vmEl, dmag, dMax, dLoad, comp, nSolid, holes, removed, brokenLoads, thin, thinCount, U: U32 };
+  return { lamB, modeB, added, filled, solid, vm, vmMax, vmMaxAll, vmEl, dmag, dMax, dLoad, comp, nSolid, holes, removed, brokenLoads, thin, thinCount, U: U32 };
 }
 
-if (typeof module !== 'undefined') module.exports = { makeKE, makeMesh, feSolve, makeFilter, optimize, evaluate, components, morphOpen };
+if (typeof module !== 'undefined') module.exports = { buckle, makePlateKE, makeKE, makeMesh, feSolve, makeFilter, optimize, evaluate, components, morphOpen };

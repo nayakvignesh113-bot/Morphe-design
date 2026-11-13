@@ -11,9 +11,10 @@ There is no install and no server. Everything runs client-side in one `index.htm
    - **Support**: drag along an edge, or tap for a bolt point. Choose fixed, slides horizontally or slides vertically.
    - **Load**: tap for a 1 kN downward load, or drag to set its direction. Edit Fx/Fy in N.
    - **Keep-out / Keep-solid**: mark clearances, flanges and mounting faces.
-3. Set the material, the manufacturing process (this sets the minimum member width), the target factor of safety and the deflection limit.
+3. Set the material, the manufacturing process (this sets the minimum member width), the target factor of safety, the buckling load factor and the deflection limit.
 4. Press **Generate designs**. The designs form live. The recommended one is marked, and the mass-vs-deflection chart shows the trade-off.
-5. Inspect the Stress, Deflection and Thin-webs views, then download the CAD pack (DXF + SVG + CSV report + project JSON).
+5. Inspect the Stress, Deflection, Buckling and Thin-webs views, then download the CAD pack (DXF + STL + SVG + CSV report + project JSON), or DXF/STL on their own.
+6. Save project / Open project keeps a setup as a file. The current setup is also kept in your browser between visits, and Undo (Ctrl+Z) steps back through edits.
 
 ## Method
 
@@ -23,7 +24,8 @@ There is no install and no server. Everything runs client-side in one `index.htm
 | Optimization | SIMP (p = 3), density filter, Heaviside projection with β continuation 1 → 16, optimality-criteria update |
 | Design family | Volume fraction 0.20 / 0.30 / 0.45 × two member-size filters (process minimum width, and 1.8× that) |
 | Clean-up | Threshold at 0.5; remove islands not connected to a support; fill enclosed slivers smaller than a min-width square; widen members narrower than the minimum width (morphological opening check) |
-| Sizing | Solved with E = 1, t = 1. Stress ∝ 1/t and deflection ∝ 1/(E·t), so the required thickness is exact and then rounded up to a standard gauge |
+| Buckling | Linear eigenvalue of out-of-plane plate buckling: ACM 12-dof plate elements, geometric stiffness from the in-plane stresses, shifted power iteration for the smallest positive load factor. Bolted supports clamped, sliding supports simply supported |
+| Sizing | Solved with E = 1, t = 1. Stress ∝ 1/t, deflection ∝ 1/(E·t), buckling load ∝ E·t³, so each required thickness is exact; the largest one wins, rounded up to a standard gauge |
 | Stress | Element-centroid von Mises. Elements touching a point load are excluded from the peak (a point load has no finite stress) |
 | Export | Marching squares on the cleaned layout → Douglas–Peucker simplification → closed DXF polylines in mm |
 
@@ -36,10 +38,13 @@ There is no install and no server. Everything runs client-side in one `index.htm
 | MBB beam 60×20, compliance history | Independent Python/SciPy port of Andreassen et al. (2011) 88-line code (`tests/ref88.py`) | Identical to 4+ significant figures over 60 iterations |
 | Cantilever 200×20 mm tip deflection | Timoshenko beam theory (bending + shear) | −0.02 % |
 | Mid-span bending stress | Mc/I | −0.12 % |
+| Simply supported square plate, uniaxial compression | N_cr = 4π²D/b² | −0.07 % |
+| Cantilever strip column (ν = 0) | Euler π²EI/4L² | 0.00 % |
+| Plate in pure tension | No buckling | No buckling |
 
 ## Limits
 
-Linear-elastic, static, in-plane loads, uniform thickness, a single load case. It does **not** check buckling of slender compression members, out-of-plane loading, fatigue or bolt-hole bearing. Before you release a part, run the exported geometry through a full FEA.
+Linear-elastic, static, in-plane loads, uniform thickness, a single load case. Buckling is a linear (bifurcation) check, so keep the buckling load factor at 3 or more to cover imperfections. It does **not** check out-of-plane applied loads, fatigue or bolt-hole bearing. Before you release a part, run the exported geometry through a full FEA.
 
 ## Develop
 
