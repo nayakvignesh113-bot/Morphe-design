@@ -57,6 +57,16 @@ const check = (name, got, want, tolPct) => {
   console.log(`${lt === Infinity ? 'PASS' : 'FAIL'}  tension-only plate reports no buckling (${lt})`); if (lt !== Infinity) fail++;
 }
 
+// 3b. Biaxial plate where buckling under the reversed load is 8x easier: the solver must still return the real-load mode
+{
+  const n = 40, a = 100, nu = 0.3, mesh = C.makeMesh(n, n), D = 1 / (12 * (1 - nu * nu));
+  const S = new Float64Array(3 * mesh.nel); for (let e = 0; e < mesh.nel; e++) { S[3 * e] = -1; S[3 * e + 1] = 3; }
+  const wfix = new Uint8Array(3 * mesh.nn);
+  for (let ix = 0; ix <= n; ix++) for (let iy = 0; iy <= n; iy++) if (ix === 0 || iy === 0 || ix === n || iy === n) wfix[3 * mesh.node(ix, iy)] = 1;
+  let best = Infinity; for (let m = 1; m < 12; m++) for (let k = 1; k < 6; k++) { const den = m * m - 3 * k * k; if (den > 0) best = Math.min(best, D * Math.PI ** 2 * (m * m + k * k) ** 2 / den / a ** 2); }
+  check('biaxial plate, reversed-load mode dominant', C.buckle(mesh, nu, a / n, new Uint8Array(mesh.nel).fill(1), S, wfix).lam, best, 0.5);
+}
+
 // 4. Euler cantilever column (200 x 10 mm strip, clamped root, axial tip load) through the full evaluate() path, nu = 0
 {
   const L = 200, B = 10, nelx = 200, nely = 10, mesh = C.makeMesh(nelx, nely);

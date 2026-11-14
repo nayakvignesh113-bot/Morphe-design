@@ -143,6 +143,10 @@ table.metrics td { padding: 5px 4px; border-bottom: 1px solid var(--line); verti
 table.metrics td:first-child { color: var(--muted); }
 table.metrics td:last-child { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .exports { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+table.verify thead td { color: var(--muted); font-size: 12px; text-align: right; }
+table.verify thead td:first-child { text-align: left; }
+table.verify td:not(:first-child) { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+table.verify td:first-child { font-family: var(--font-body); }
 #pareto { width: 100%; height: auto; display: block; }
 .legend { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-top: 6px; flex-wrap: wrap; }
 .legend canvas { height: 10px; width: 160px; border-radius: 2px; }
@@ -254,6 +258,7 @@ table.metrics td:last-child { text-align: right; font-family: var(--font-mono); 
       <div>
         <h3 id="dtitle">Selected design</h3>
         <table class="metrics"><tbody id="metrics"></tbody></table>
+        <div id="verifyBox"></div>
         <div class="exports">
           <button class="btn" id="exZip">Download CAD pack (.zip: DXF, STL, SVG, report)</button>
           <button class="btn" id="exDxf">DXF</button>
@@ -275,6 +280,7 @@ table.metrics td:last-child { text-align: right; font-family: var(--font-mono); 
       <ul>
         <li>2D plane-stress, linear-elastic, static analysis of a plate of uniform thickness. Stress is element-centroid von Mises; elements touching a point load are excluded from the peak because a point load has no finite stress. Your fastener detail sets that local stress.</li>
         <li>Several load cases (separate situations the part must survive, not loads applied together): each design minimizes the summed compliance of all cases, and is then checked against the worst case for stress, deflection and buckling.</li>
+        <li>Mesh check: after each run, every design's cut outline is re-analysed on meshes 2× (and, when affordable, 3×) finer. Sizing uses the finest mesh, and the report shows how much the numbers moved. Peak stress at rounded junctions converges from below (the optimizer mesh under-reads it by 10–25%), so it is extrapolated from the two finest meshes (first-order Richardson) and sizing uses that value; a peak still rising more than 10% on the last refinement is rejected as a sharp corner. Stress within three optimizer elements of a support or point load is reported separately as a hot spot, because it depends on the joint detail rather than the shape.</li>
         <li>Thickness is solved exactly: stress scales with 1/t, deflection with 1/(E·t) and the buckling load with E·t³. The largest requirement wins, then it is rounded up to the next standard plate gauge.</li>
         <li>Buckling is a linear eigenvalue check of out-of-plane plate buckling. Bolted supports are clamped, sliding supports are simply supported, and load points are free out of plane. A factor of 3 or more allows for imperfections; real parts with large initial bow need more.</li>
         <li>Not checked: out-of-plane applied loads, fatigue, contact and bearing at bolt holes. Before release, rerun the exported geometry in your FEA package.</li>
@@ -300,9 +306,9 @@ self.onmessage = (m) => {
       const ev = evaluate(j, res.xPhys, j.h);
       self.postMessage({ type: 'done', jobId: j.jobId, runId: j.runId, it: res.it, x: Float32Array.from(res.xPhys), ev });
     } else {
-      const field = new Float64Array(j.nelx * j.nely).fill(1);
+      const field = j.field || new Float64Array(j.nelx * j.nely).fill(1);
       const ev = evaluate(j, field, j.h);
-      self.postMessage({ type: 'done', jobId: j.jobId, runId: j.runId, it: 0, x: new Float32Array(field), ev });
+      self.postMessage({ type: 'done', jobId: j.jobId, runId: j.runId, level: j.level, it: 0, x: new Float32Array(field), ev });
     }
   } catch (err) { self.postMessage({ type: 'error', jobId: j.jobId, runId: j.runId, message: String(err && err.message || err) }); }
 };

@@ -25,7 +25,8 @@ There is no install and no server. Everything runs client-side in one `index.htm
 | Optimization | SIMP (p = 3), density filter, Heaviside projection with β continuation 1 → 16, optimality-criteria update. With several load cases the summed compliance is minimized (one factorization, one back-solve per case) |
 | Design family | Volume fraction 0.20 / 0.30 / 0.45 × two member-size filters (process minimum width, and 1.8× that) |
 | Clean-up | Threshold at 0.5; remove islands not connected to a support; fill enclosed slivers smaller than a min-width square; widen members narrower than the minimum width (morphological opening check) |
-| Buckling | Linear eigenvalue of out-of-plane plate buckling: ACM 12-dof plate elements, geometric stiffness from the in-plane stresses, shifted power iteration for the smallest positive load factor. Bolted supports clamped, sliding supports simply supported |
+| Buckling | Linear eigenvalue of out-of-plane plate buckling: ACM 12-dof plate elements, geometric stiffness from the in-plane stresses, Lanczos (full re-orthogonalization, residual test) for the smallest positive load factor, which stays correct when the reversed-load mode dominates. Bolted supports clamped, sliding supports simply supported |
+| Mesh check | After each run, every design's cut outline (the smoothed layout that becomes the DXF) is resampled onto the same, 2× and 3× finer meshes and re-analysed. Peak stress, which element-centre stress under-reads at rounded junctions and bending surfaces, is extrapolated from the two finest meshes (first-order Richardson). Sizing uses that value and the fine-mesh deflection and buckling. Designs whose peak still rises >10% on the last refinement (a sharp corner) or whose outline loses material when smoothed are rejected. Stress within 3 optimizer elements of supports and point loads is reported separately as a hot spot |
 | Load cases | Every design is analysed for every case: stress, deflection and buckling are each taken from the worst case, and the report names which case governs |
 | Sizing | Solved with E = 1, t = 1. Stress ∝ 1/t, deflection ∝ 1/(E·t), buckling load ∝ E·t³, so each required thickness is exact; the largest one wins, rounded up to a standard gauge |
 | Stress | Element-centroid von Mises. Elements touching a point load are excluded from the peak (a point load has no finite stress) |
@@ -45,6 +46,11 @@ There is no install and no server. Everything runs client-side in one `index.htm
 | Simply supported square plate, uniaxial compression | N_cr = 4π²D/b² | −0.07 % |
 | Cantilever strip column (ν = 0) | Euler π²EI/4L² | 0.00 % |
 | Plate in pure tension | No buckling | No buckling |
+| Biaxial plate (σx = −1, σy = +3), reversed-load mode 8.3× easier | Exact positive mode (m = 3, n = 1) | −0.12 % |
+
+## Why the mesh check matters
+
+On the cantilever template, the optimizer mesh under-reads the peak stress at member junctions by 10–25%. Without the check, design A reported FoS 4.22; on the mesh-checked outline it is 3.22. The check also catches outlines that lose a member when smoothed for cutting, and square re-entrant corners. On the L-bracket with a square keep-out corner, every design is rejected and the tool offers to round the corner; at R 12 mm the designs converge.
 
 ## Limits
 

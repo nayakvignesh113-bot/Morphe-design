@@ -174,6 +174,25 @@ function solveDense(A, n) { // returns inverse of n x n (row-major) by Gauss-Jor
   const inv = new Float64Array(n*n); for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) inv[i*n + j] = M[i*2*n + n + j];
   return inv;
 }
+function tridiagTop(a, b) {
+  const m = a.length;
+  if (m === 1) return { theta: a[0], y: [1] };
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < m; i++) { const r = (i > 0 ? Math.abs(b[i-1]) : 0) + (i < m-1 ? Math.abs(b[i]) : 0); lo = Math.min(lo, a[i] - r); hi = Math.max(hi, a[i] + r); }
+  const countBelow = (x) => { let c = 0, d = 1; for (let i = 0; i < m; i++) { d = a[i] - x - (i > 0 ? b[i-1]*b[i-1] / (d || 1e-300) : 0); if (d < 0) c++; } return c; };
+  for (let it = 0; it < 200 && hi - lo > 1e-15 * Math.max(Math.abs(lo), Math.abs(hi)); it++) { const mid = (lo + hi) / 2; if (countBelow(mid) === m) hi = mid; else lo = mid; }
+  const theta = hi;
+  // inverse iteration (T - theta' I) y = y with a tiny offset, Thomas algorithm
+  let y = new Float64Array(m).fill(1), sh = theta + 1e-10 * Math.max(1e-300, Math.abs(theta));
+  for (let it = 0; it < 3; it++) {
+    const c = new Float64Array(m), d = new Float64Array(m);
+    let den = a[0] - sh; c[0] = (m > 1 ? b[0] : 0) / den; d[0] = y[0] / den;
+    for (let i = 1; i < m; i++) { den = (a[i] - sh) - b[i-1]*c[i-1]; if (den === 0) den = 1e-300; c[i] = i < m-1 ? b[i] / den : 0; d[i] = (y[i] - b[i-1]*d[i-1]) / den; }
+    const z = new Float64Array(m); z[m-1] = d[m-1]; for (let i = m-2; i >= 0; i--) z[i] = d[i] - c[i]*z[i+1];
+    let n = 0; for (const v of z) n += v*v; n = Math.sqrt(n); y = z.map(v => v / n);
+  }
+  return { theta, y };
+}
 function makePlateKE(nu, h) {
   const a = h / 2, nodes = [[-a, -a], [a, -a], [a, a], [-a, a]]; // LL, LR, UR, UL
   const P = (x, y) => [1, x, y, x*x, x*y, y*y, x*x*x, x*x*y, x*y*y, y*y*y, x*x*x*y, x*y*y*y];
@@ -202,7 +221,7 @@ function makePlateKE(nu, h) {
 }
 /* Smallest positive load factor lambda with (Kb + lambda Kg) phi = 0, for E = 1, t = 1 and membrane stresses S (for t = 1).
    Scales as lambda(E, t) = lambdaHat * E * t^3. wfix: Uint8Array(3*nn) of restrained plate dofs. */
-function buckle(mesh, nu, h, solid, S, wfix) {
+function buckle(mesh, nu, h, solid, S, wfix, opts) {
   const { nel, nn } = mesh, ndof = 3*nn;
   const ed = new Int32Array(nel*12); let bw = 0;
   for (let e = 0; e < nel; e++) { let lo = Infinity, hi = -Infinity;
@@ -212,7 +231,7 @@ function buckle(mesh, nu, h, solid, S, wfix) {
   const Kb = new Float64Array(ndof*w), Kg = new Float64Array(ndof*w);
   const ke = new Float64Array(144);
   for (let e = 0; e < nel; e++) {
-    const sb = solid[e] ? 1 : 1e-6, sx = solid[e] ? S[3*e] : 0, sy = solid[e] ? S[3*e+1] : 0, txy = solid[e] ? S[3*e+2] : 0;
+    const wt = solid[e], sb = Math.max(wt, 1e-6), sx = wt*S[3*e], sy = wt*S[3*e+1], txy = wt*S[3*e+2];
     for (let k = 0; k < 144; k++) ke[k] = sx*KE.Kgx[k] + sy*KE.Kgy[k] + txy*KE.Kgxy[k];
     for (let i = 0; i < 12; i++) { const gi = ed[e*12 + i];
       for (let j = 0; j < 12; j++) { const gj = ed[e*12 + j]; if (gi < gj) continue;
@@ -228,29 +247,44 @@ function buckle(mesh, nu, h, solid, S, wfix) {
     for (let i = 0; i < ndof; i++) { const r = i*w - i + bw; let s = A[r + i]*x[i];
       for (let j = Math.max(0, i-bw); j < i; j++) { const v = A[r + j]; s += v*x[j]; y[j] += v*x[i]; } y[i] += s; } return y; };
   const dot = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i]*b[i]; return s; };
-  // operator A x = Kb^-1 (-Kg) x has eigenvalues mu = 1/lambda; it is self-adjoint in the Kb inner product
-  const Aop = (x) => { const y = mv(Kg, x); for (let i = 0; i < ndof; i++) y[i] = -y[i]; return solveBand(Kb, ndof, bw, y); };
-  const rq = (x) => { const g = mv(Kg, x); return -dot(x, g) / dot(x, mv(KbCopy, x)); };
+  // Lanczos on A = Kb^-1 (-Kg), self-adjoint in the Kb inner product; its eigenvalues are mu = 1/lambda.
+  // The largest mu (smallest positive lambda) is an extreme eigenvalue, which Lanczos finds reliably;
+  // full re-orthogonalization and a residual test guard against stopping on a higher mode.
   let seed = 12345; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5;
-  const power = (shift) => {
-    let x = new Float64Array(ndof); for (let i = 0; i < ndof; i++) x[i] = fx[i] ? 0 : rnd();
-    let mu = 0, prev = Infinity;
-    for (let it = 0; it < 500; it++) {
-      const y = Aop(x); if (shift) for (let i = 0; i < ndof; i++) y[i] += shift * x[i];
-      let nrm = 0; for (let i = 0; i < ndof; i++) nrm = Math.max(nrm, Math.abs(y[i]));
-      if (!(nrm > 0)) return { mu: 0, x };
-      for (let i = 0; i < ndof; i++) x[i] = y[i] / nrm;
-      if (it % 5 === 4) { mu = rq(x); if (Math.abs(mu - prev) <= 1e-7 * Math.abs(mu)) break; prev = mu; }
+  let q = new Float64Array(ndof); for (let i = 0; i < ndof; i++) q[i] = fx[i] ? 0 : rnd();
+  { const nq = Math.sqrt(dot(q, mv(KbCopy, q))); for (let i = 0; i < ndof; i++) q[i] /= nq; }
+  const Q = [], alpha = [], beta = [];
+  const mMax = Math.min(ndof - 1, opts && opts.maxIter || 120);
+  let theta = 0, y = null, converged = false;
+  for (let j = 0; j < mMax; j++) {
+    Q.push(q);
+    const g = mv(Kg, q); for (let i = 0; i < ndof; i++) g[i] = -g[i];
+    let r = solveBand(Kb, ndof, bw, g);           // r = A q
+    alpha.push(dot(q, g));                        // <q, A q>_Kb = q^T (-Kg q)
+    for (let pass = 0; pass < 2; pass++) {        // full re-orthogonalization in the Kb inner product
+      const Kr = mv(KbCopy, r);
+      for (const qi of Q) { const c = dot(qi, Kr); for (let i = 0; i < ndof; i++) r[i] -= c * qi[i]; }
     }
-    return { mu: rq(x), x };
-  };
-  let r = power(0);
-  if (r.mu < 0) { const s2 = -r.mu * 1.0001; r = power(s2); if (!(r.mu > 1e-9 * s2)) return { lam: Infinity, mode: null }; }
-  if (!(r.mu > 0)) return { lam: Infinity, mode: null };
+    const b = Math.sqrt(Math.max(0, dot(r, mv(KbCopy, r))));
+    // Ritz value and vector of the tridiagonal matrix at its top end
+    if (j >= 4 && (j % 3 === 0 || j === mMax - 1 || b < 1e-14)) {
+      const tr = tridiagTop(alpha, beta); theta = tr.theta; y = tr.y;
+      const resid = Math.abs(b * y[y.length - 1]);
+      if (theta > 0 && resid <= 1e-8 * theta) { converged = true; break; }
+      if (theta <= 0 && j >= 30 && resid <= 1e-8 * Math.max(Math.abs(theta), 1e-300)) break;
+    }
+    if (b < 1e-14 * Math.max(1, Math.abs(alpha[0]))) { const tr = tridiagTop(alpha, beta); theta = tr.theta; y = tr.y; converged = true; break; }
+    beta.push(b); q = r.map(v => v / b);
+  }
+  if (!y) { const tr = tridiagTop(alpha, beta.slice(0, alpha.length - 1)); theta = tr.theta; y = tr.y; }
+  if (!(theta > 0)) return { lam: Infinity, mode: null, converged };
+  const xr = new Float64Array(ndof);
+  for (let k = 0; k < y.length; k++) for (let i = 0; i < ndof; i++) xr[i] += y[k] * Q[k][i];
+  const r = { mu: theta, x: xr };
   const mode = new Float32Array(nn); let m = 0;
   for (let n = 0; n < nn; n++) { mode[n] = r.x[3*n]; m = Math.max(m, Math.abs(mode[n])); }
   if (m) for (let n = 0; n < nn; n++) mode[n] /= m;
-  return { lam: 1 / r.mu, mode };
+  return { lam: 1 / r.mu, mode, converged };
 }
 
 const projT = (x, b, eta) => (Math.tanh(b*eta) + Math.tanh(b*(x-eta))) / (Math.tanh(b*eta) + Math.tanh(b*(1-eta)));
@@ -414,8 +448,8 @@ function evaluate(job, field, h) {
   const keep = new Uint8Array(n);
   for (let e = 0; e < nel; e++) if (solid[e]) for (let a = 0; a < 4; a++) if (fixedNode[mesh.edof[e*8+2*a] >> 1]) keep[lab[e]] = 1;
   let anyKeep = false; for (let i = 0; i < n; i++) anyKeep = anyKeep || keep[i];
-  let removed = 0;
-  if (anyKeep) for (let e = 0; e < nel; e++) if (solid[e] && !keep[lab[e]]) { solid[e] = 0; removed++; }
+  let removed = 0; const removedMask = new Uint8Array(nel);
+  if (anyKeep) for (let e = 0; e < nel; e++) if (solid[e] && !keep[lab[e]]) { solid[e] = 0; removed++; removedMask[e] = 1; }
   // per-case loaded nodes; every one must touch material
   const Fs = loadCases(job), nCases = Fs.length;
   const loadNodeC = Fs.map(F => { const ln = new Uint8Array(mesh.nn); for (let d = 0; d < mesh.ndof; d++) if (F[d] !== 0) ln[d >> 1] = 1; return ln; });
@@ -423,10 +457,27 @@ function evaluate(job, field, h) {
   for (let e = 0; e < nel; e++) if (solid[e]) for (let a = 0; a < 4; a++) touched[mesh.edof[e*8+2*a] >> 1] = 1;
   let brokenLoads = 0; for (let i = 0; i < mesh.nn; i++) if (loadNodeC.some(ln => ln[i]) && !touched[i]) brokenLoads++;
   // FE with solid/void (void = 1e-6 of solid); stress envelope over the load cases
-  const Ev = new Float64Array(nel);
-  for (let e = 0; e < nel; e++) Ev[e] = solid[e] ? 1 : 1e-6;
+  const Ev = new Float64Array(nel), frac = job.fraction;
+  for (let e = 0; e < nel; e++) {
+    if (frac && passive[e] === 0) Ev[e] = (solid[e] || removedMask[e] === 0) ? Math.max(1e-6, removedMask[e] ? 0 : frac[e]) : 1e-6;
+    else Ev[e] = solid[e] ? 1 : 1e-6;
+  }
   const Us = feSolveMulti(mesh, KE, Ev, Fs, job.fixed);
   const vm = new Float32Array(nel), tmp3 = [0, 0, 0];
+  // zone within exclR mm of supports and load points: idealized boundary conditions make stress there mesh-dependent
+  const near = new Uint8Array(nel);
+  if (job.exclR > 0) {
+    const bcNode = new Uint8Array(mesh.nn);
+    for (let n = 0; n < mesh.nn; n++) if (fixedNode[n] || loadNodeC.some(ln => ln[n])) bcNode[n] = 1;
+    const seed = [];
+    for (let e = 0; e < nel; e++) for (let a = 0; a < 4; a++) if (bcNode[mesh.edof[e*8+2*a] >> 1]) { seed.push(e); break; }
+    const R = job.exclR / h, Ri = Math.ceil(R);
+    for (const e of seed) { const ix = Math.floor(e/nely), iy = e % nely;
+      for (let a = -Ri; a <= Ri; a++) for (let b = -Ri; b <= Ri; b++) { const jx = ix+a, jy = iy+b;
+        if (jx >= 0 && jy >= 0 && jx < nelx && jy < nely && a*a + b*b <= R*R + 1e-9) near[jx*nely + jy] = 1; } }
+  }
+  const vmAwayC = [], awayElC = [];
+  let vmZone = 0;
   const SigC = [], vmMaxC = [], dLoadC = [], dMaxC = [], compC = [];
   let nSolid = 0, vmMaxAll = 0, vmEl = -1;
   for (let e = 0; e < nel; e++) if (solid[e]) nSolid++;
@@ -442,7 +493,9 @@ function evaluate(job, field, h) {
       let atLoad = false;
       for (let a = 0; a < 4; a++) if (ln[mesh.edof[e*8+2*a] >> 1]) atLoad = true;
       if (!atLoad && s > peak) { peak = s; peakEl = e; }
+      if (near[e]) vmZone = Math.max(vmZone, s); else if (s > (vmAwayC[k] || 0)) { vmAwayC[k] = s; awayElC[k] = e; }
     }
+    if (vmAwayC[k] === undefined) vmAwayC[k] = 0;
     let dMx = 0, dLd = 0;
     for (let i = 0; i < mesh.nn; i++) { const m = Math.hypot(U[2*i], U[2*i+1]); if (touched[i]) dMx = Math.max(dMx, m); if (ln[i]) dLd = Math.max(dLd, m); }
     let cp = 0; for (let d = 0; d < mesh.ndof; d++) cp += Fs[k][d] * U[d];
@@ -452,6 +505,7 @@ function evaluate(job, field, h) {
   const argmax = (arr) => arr.reduce((b, v, i) => v > arr[b] ? i : b, 0);
   const vmCase = argmax(vmMaxC), dCase = argmax(dLoadC);
   const vmMax = vmMaxC[vmCase], dLoad = dLoadC[dCase], dMax = Math.max(...dMaxC);
+  const awayCase = argmax(vmAwayC), vmAway = job.exclR > 0 ? vmAwayC[awayCase] : vmMax;
   const comp = compC.reduce((a, b) => a + b, 0);
   const U = Us[dCase];
   const dmag = new Float32Array(mesh.nn);
@@ -476,12 +530,12 @@ function evaluate(job, field, h) {
     for (let n = 0; n < mesh.nn; n++) { const fxx = job.fixed[2*n], fyy = job.fixed[2*n+1];
       if (fxx || fyy) wfix[3*n] = 1; if (fxx && fyy) { wfix[3*n+1] = 1; wfix[3*n+2] = 1; } }
     for (let k = 0; k < nCases; k++) {
-      const bk = buckle(mesh, nu, h, solid, SigC[k], wfix); lamC.push(bk.lam);
+      const bk = buckle(mesh, nu, h, frac ? Ev : solid, SigC[k], wfix); lamC.push(bk.lam);
       if (bk.lam < lamB) { lamB = bk.lam; modeB = bk.mode; lamCase = k; }
     }
   }
   const U32 = new Float32Array(U);
-  return { nCases, vmCase, dCase, lamCase, vmMaxC, dLoadC, lamC, lamB, modeB, added, filled, solid, vm, vmMax, vmMaxAll, vmEl, dmag, dMax, dLoad, comp, nSolid, holes, removed, brokenLoads, thin, thinCount, U: U32 };
+  return { awayXY: (() => { const e = awayElC[awayCase]; return e === undefined ? null : [(Math.floor(e / nely) + 0.5) * h, (e % nely + 0.5) * h]; })(), vmAway, vmAwayC, awayCase: job.exclR > 0 ? awayCase : vmCase, vmZone, nCases, vmCase, dCase, lamCase, vmMaxC, dLoadC, lamC, lamB, modeB, added, filled, solid, vm, vmMax, vmMaxAll, vmEl, dmag, dMax, dLoad, comp, nSolid, holes, removed, brokenLoads, thin, thinCount, U: U32 };
 }
 
 if (typeof module !== 'undefined') module.exports = { feSolveMulti, buckle, makePlateKE, makeKE, makeMesh, feSolve, makeFilter, optimize, evaluate, components, morphOpen };

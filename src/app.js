@@ -38,7 +38,7 @@ const PRESETS = {
     { type: 'fix', dof: 'y', x0: 294, y0: 0, x1: 300, y1: 0 },
     { type: 'load', x: 150, y: 75, fx: 0, fy: -3000 } ] }),
   lbracket: () => ({ W: 160, H: 160, sym: false, features: [
-    { type: 'void', shape: 'rect', x0: 64, y0: 64, x1: 160, y1: 160 },
+    { type: 'void', shape: 'rect', x0: 64, y0: 64, x1: 160, y1: 160, rc: 12 },
     { type: 'fix', dof: 'xy', x0: 0, y0: 160, x1: 64, y1: 160 },
     { type: 'load', x: 160, y: 32, fx: 0, fy: -1500 } ] }),
   shelf: () => ({ W: 150, H: 150, sym: false, features: [
@@ -80,21 +80,28 @@ function applyPreset(key, noSnap) {
 }
 
 // ---------------- discretization ----------------
-function discretize() {
+// rectangle test; a keep-out rectangle may have rounded corners (radius rc, mm)
+function insideRect(f, x, y) {
+  const x0 = Math.min(f.x0, f.x1), x1 = Math.max(f.x0, f.x1), y0 = Math.min(f.y0, f.y1), y1 = Math.max(f.y0, f.y1);
+  if (x < x0 || x > x1 || y < y0 || y > y1) return false;
+  const r = Math.min(f.rc || 0, (x1 - x0) / 2, (y1 - y0) / 2); if (!(r > 0)) return true;
+  const cx = Math.max(x0 + r, Math.min(x1 - r, x)), cy = Math.max(y0 + r, Math.min(y1 - r, y));
+  return Math.hypot(x - cx, y - cy) <= r;
+}
+function discretize(opts = {}) {
   const N = RES[S.res];
   let h = Math.sqrt(S.W * S.H / N);
-  const nelx = Math.max(8, Math.round(S.W / h)), nely = Math.max(4, Math.round(S.H / h));
+  const nelx = opts.nelx || Math.max(8, Math.round(S.W / h)), nely = opts.nely || Math.max(4, Math.round(S.H / h));
   const hx = S.W / nelx, hy = S.H / nely; h = (hx + hy) / 2;
   const nel = nelx * nely, nn = (nelx + 1) * (nely + 1), ndof = 2 * nn;
   const colwise = nely <= nelx;
   const node = colwise ? (ix, iy) => ix * (nely + 1) + iy : (ix, iy) => iy * (nelx + 1) + ix;
   const nodeXY = (ix, iy) => [ix * hx, S.H - iy * hy];
   const passive = new Int8Array(nel), fixed = new Uint8Array(ndof);
-  const inside = (f, x, y) => f.shape === 'circle' ? Math.hypot(x - f.cx, y - f.cy) <= f.r
-    : x >= Math.min(f.x0, f.x1) && x <= Math.max(f.x0, f.x1) && y >= Math.min(f.y0, f.y1) && y <= Math.max(f.y0, f.y1);
+  const inside = (f, x, y) => f.shape === 'circle' ? Math.hypot(x - f.cx, y - f.cy) <= f.r : insideRect(f, x, y);
   const center = (ix, iy) => [(ix + 0.5) * hx, S.H - (iy + 0.5) * hy];
   for (const f of S.features) if (f.type === 'solid') for (let ix = 0; ix < nelx; ix++) for (let iy = 0; iy < nely; iy++) { const [x, y] = center(ix, iy); if (inside(f, x, y)) passive[ix * nely + iy] = 2; }
-  const padR = Math.max(1.6 * h, 0.6 * S.minW);
+  const padR = Math.max(1.6 * (opts.padH || h), 0.6 * S.minW);
   const pads = [];
   const nearest = (x, y) => [Math.min(nelx, Math.max(0, Math.round(x / hx))), Math.min(nely, Math.max(0, Math.round((S.H - y) / hy)))];
   let nFixX = 0, nFixY = 0;
@@ -135,12 +142,12 @@ let pool = [];
 function startRun() {
   const d = discretize();
   if (d.errors.length) { showBanner(d.errors.join(' '), true); return; }
-  pool.forEach(w => w.terminate()); pool = [];
+  pool.forEach(w => w.terminate()); pool = []; vpool.forEach(w => w.terminate()); vpool = []; S.verify = null;
   const runId = Date.now();
   S.run = { runId, disc: d, queue: [], active: 0, done: 0, total: VARIANTS.length + 1, started: performance.now() };
   S.results = {}; S.dirty = false; S.lastDisc = d; showBanner(symmetryIssue());
   const rB = Math.max(2.5, 1.8 * d.rmin0);
-  const base = { runId, nelx: d.nelx, nely: d.nely, nu: d.nu, Fs: d.Fs, fixed: d.fixed, passive: d.passive, h: d.h, minWidth: S.minW, symX: S.sym, enforceWidth: true };
+  const base = { runId, nelx: d.nelx, nely: d.nely, nu: d.nu, Fs: d.Fs, fixed: d.fixed, passive: d.passive, h: d.h, minWidth: S.minW, symX: S.sym, enforceWidth: true, exclR: EXCL * d.h };
   S.run.queue.push({ ...base, jobId: 'base', kind: 'eval' });
   for (const v of VARIANTS) S.run.queue.push({ ...base, jobId: v.id, kind: 'opt', vf: v.vf, rmin: v.bold ? rB : d.rmin0, maxIter: 110, penal: 3 });
   for (const j of S.run.queue) S.results[j.jobId] = { id: j.jobId, status: 'queued', it: 0, x: null, ev: null };
@@ -163,31 +170,128 @@ function onWorker(m) {
   if (d.type === 'error') { R.status = 'error'; R.error = d.message; }
   else { R.status = 'done'; R.x = d.x; R.ev = d.ev; R.it = d.it; }
   feed(m.target);
-  if (S.run.done === S.run.total) { S.run.finished = performance.now(); computeDistinct(); if (!S.dirty) $('go').textContent = 'Generate designs'; pool.forEach(w => w.terminate()); pool = []; }
+  if (S.run.done === S.run.total) { S.run.finished = performance.now(); computeDistinct(); if (!S.dirty) $('go').textContent = 'Generate designs'; pool.forEach(w => w.terminate()); pool = []; startVerify(); }
   renderAll();
+}
+
+// ---------------- mesh check ----------------
+// Resample the outline that will be cut (smoothed layout, iso-level 0.5) onto finer meshes and re-analyse it.
+let vpool = [];
+const VERIFY_MAX_EL = 30000;   // finest mesh-check level (stress and deflection only)
+const EXCL = 3;                // hot-spot zone around supports and loads, in optimizer elements (from the convergence study)
+function sampleField(R, d0, d) {
+  const nx = d0.nelx, ny = d0.nely, sol = R.ev.solid, b = new Float32Array(nx * ny);
+  for (let ix = 0; ix < nx; ix++) for (let iy = 0; iy < ny; iy++) {
+    let s = 0, n = 0; for (let a = -1; a <= 1; a++) for (let c = -1; c <= 1; c++) { const jx = ix + a, jy = iy + c; if (jx >= 0 && jy >= 0 && jx < nx && jy < ny) { const w = a === 0 && c === 0 ? 4 : 1; s += sol[jx * ny + jy] * w; n += w; } }
+    b[ix * ny + iy] = s / n;
+  }
+  const v = new Float32Array((nx + 1) * (ny + 1)); // nodal values, node (i, j) with j from the top
+  for (let i = 0; i <= nx; i++) for (let j = 0; j <= ny; j++) {
+    let s = 0, n = 0; for (const [a, c] of [[-1, -1], [0, -1], [-1, 0], [0, 0]]) { const ex = i + a, ey = j + c; if (ex >= 0 && ey >= 0 && ex < nx && ey < ny) { s += b[ex * ny + ey]; n++; } }
+    v[i * (ny + 1) + j] = s / n;
+  }
+  const field = new Float64Array(d.nelx * d.nely);
+  for (let ix = 0; ix < d.nelx; ix++) for (let iy = 0; iy < d.nely; iy++) {
+    const fi = (ix + 0.5) * d.hx / d0.hx, fj = (iy + 0.5) * d.hy / d0.hy;
+    const i0 = Math.min(nx - 1, Math.floor(fi)), j0 = Math.min(ny - 1, Math.floor(fj)), u = fi - i0, w = fj - j0;
+    const at = (i, j) => v[i * (ny + 1) + j];
+    field[ix * d.nely + iy] = (1 - u) * (1 - w) * at(i0, j0) + u * (1 - w) * at(i0 + 1, j0) + (1 - u) * w * at(i0, j0 + 1) + u * w * at(i0 + 1, j0 + 1);
+  }
+  return field;
+}
+const levelOf = (ev, r, nel, bk = true) => ({ r, nel, bk, xy: ev.awayXY, vmAway: ev.vmAway, vmZone: ev.vmZone, dLoad: ev.dLoad, lamB: ev.lamB, awayCase: ev.awayCase, dCase: ev.dCase, lamCase: ev.lamCase, brokenLoads: ev.brokenLoads });
+function startVerify() {
+  if (S.dirty || !S.run) return;
+  const d0 = S.lastDisc, levels = [1, 2]; if (d0.nel * 9 <= VERIFY_MAX_EL) levels.push(3);  // buckling on 1x and 2x only
+  const ids = Object.keys(S.results).filter(id => S.results[id].ev);
+  const discs = levels.map(r => discretize({ nelx: r * d0.nelx, nely: r * d0.nely, padH: d0.h }));
+  if (discs.some(d => d.errors.length)) return;
+  const queue = [];
+  levels.forEach((r, li) => { const d = discs[li];
+    for (const id of ids) queue.push({ kind: 'eval', runId: S.run.runId, jobId: id, level: r, nelx: d.nelx, nely: d.nely, nu: d.nu, Fs: d.Fs, fixed: d.fixed, passive: new Int8Array(d.nel),
+      h: d.h, minWidth: S.minW, enforceWidth: false, exclR: EXCL * d0.h, buckling: r <= 2, field: sampleField(S.results[id], d0, d) }); });
+  for (const id of ids) { const R = S.results[id]; R.ver = { levels: [levelOf(R.ev, 'opt', d0.nel)], pending: levels.length, status: 'running' }; }
+  S.verify = { runId: S.run.runId, queue, total: queue.length, done: 0, levels, started: performance.now() };
+  const nW = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
+  for (let i = 0; i < nW; i++) { const w = new Worker(workerURL); w.onmessage = onVerify; vpool.push(w); feedV(w); }
+}
+function feedV(w) { const v = S.verify; if (v && v.queue.length) w.postMessage(v.queue.shift()); }
+function onVerify(m) {
+  const d = m.data, v = S.verify; if (!v || !S.run || d.runId !== v.runId || d.type === 'iter') return;
+  const R = S.results[d.jobId], job = d;
+  v.done++;
+  if (R && R.ver) {
+    if (d.type === 'error') R.ver.status = 'error';
+    else { R.ver.levels.push(levelOf(d.ev, d.level, d.ev.solid.length, d.level <= 2)); R.ver.levels.sort((a, b) => (a.r === 'opt' ? 0 : a.r) - (b.r === 'opt' ? 0 : b.r)); }
+    if (--R.ver.pending === 0 && R.ver.status !== 'error') R.ver.status = 'done';
+  }
+  feedV(m.target);
+  if (v.done === v.total) { v.finished = performance.now(); vpool.forEach(w => w.terminate()); vpool = []; }
+  renderAll();
+}
+// keep-out rectangle corners where rejected designs peak (a sharp re-entrant corner in the material)
+function sharpKeepoutCorners() {
+  const d = S.lastDisc; if (!d) return [];
+  const hits = new Set();
+  for (const v of VARIANTS) { const R = S.results[v.id], m = metrics(R); if (!m || !m.as || !m.as.sharp || !R.ver) continue;
+    const fin = R.ver.levels[R.ver.levels.length - 1]; if (!fin.xy) continue;
+    const px = fin.xy[0], py = d.H - fin.xy[1];
+    S.features.forEach((f, i) => { if (f.type !== 'void' || f.shape === 'circle') return;
+      const xs = [Math.min(f.x0, f.x1), Math.max(f.x0, f.x1)], ys = [Math.min(f.y0, f.y1), Math.max(f.y0, f.y1)];
+      for (const cx of xs) for (const cy of ys) if (Math.hypot(px - cx, py - cy) <= 4 * d.h + (f.rc || 0)) hits.add(i); });
+  }
+  return [...hits];
+}
+function verified(R) { return R && R.ver && R.ver.status === 'done' ? R.ver : null; }
+// Assess the mesh check. Element-centre stress under-reads peaks at rounded junctions and bending surfaces to first order in the
+// element size, so the peak is extrapolated from the two finest meshes (Richardson, p = 1): sigma = s_b + (s_b - s_a) r_a / (r_b - r_a).
+// A peak still rising more than 10% on the last refinement is treated as a sharp corner that is not converging.
+function assess(ver) {
+  const L = ver.levels.filter(l => l.r !== 'opt'), s = L.map(l => l.vmAway), finest = s[s.length - 1];
+  let est = Math.max(...s), sharp = false, p = 1;
+  if (L.length >= 2) {
+    const a = L[L.length - 2], b = L[L.length - 1];
+    if (b.vmAway > a.vmAway) { est = Math.max(est, b.vmAway + (b.vmAway - a.vmAway) * a.r / (b.r - a.r)); sharp = b.vmAway > 1.10 * a.vmAway; }
+  }
+  const rel = (a, b) => Math.abs(b - a) / Math.max(Math.abs(b), 1e-30) * 100;
+  const dLv = L.slice(-2), bLv = L.filter(l => l.bk);
+  const dChange = dLv.length === 2 ? rel(dLv[0].dLoad, dLv[1].dLoad) : null;
+  const bChange = bLv.length >= 2 && isFinite(bLv[bLv.length - 2].lamB) && isFinite(bLv[bLv.length - 1].lamB) ? rel(bLv[bLv.length - 2].lamB, bLv[bLv.length - 1].lamB) : null;
+  const sChange = L.length >= 2 ? rel(s[s.length - 2], s[s.length - 1]) : null;
+  const fin = L[L.length - 1], finB = bLv[bLv.length - 1] || fin;
+  const vmAwayFinestCase = fin.awayCase;
+  const opt = ver.levels.find(l => l.r === 'opt');
+  const outline = L[0].brokenLoads > 0 || (opt && L[0].vmAway > 1.5 * opt.vmAway);
+  return { outline, est, finest, p, sharp, extrapPct: (est / finest - 1) * 100, sChange, dChange, bChange,
+    // deflection only has to converge when it is a requirement (a deflection limit is set)
+    converged: !sharp && !outline && (!(S.dlim > 0) || dChange === null || dChange <= 5) && (bChange === null || bChange <= 5),
+    src: { vmAway: est, vmZone: Math.max(...L.map(l => l.vmZone)), dLoad: fin.dLoad, lamB: finB.lamB, awayCase: vmAwayFinestCase, dCase: fin.dCase, lamCase: finB.lamCase, brokenLoads: L.some(l => l.brokenLoads) } };
 }
 
 // ---------------- metrics ----------------
 function gaugeUp(t) { for (const g of GAUGES) if (g >= t - 1e-9) return g; return Math.ceil(t); }
 function metrics(R) {
   if (!R || !R.ev || !S.lastDisc) return null;
-  const d = S.lastDisc, M = MATERIALS[S.mat], ev = R.ev;
+  const d = S.lastDisc, M = MATERIALS[S.mat], ev = R.ev, ver = verified(R);
+  const as = ver ? assess(ver) : null, src = as ? as.src : levelOf(ev, 'opt', d.nel);
   const area = ev.nSolid * d.hx * d.hy;
-  const tS = ev.vmMax * S.fos / M.Sy;
-  const tD = S.dlim > 0 ? ev.dLoad / (M.E * S.dlim) : 0;
-  const lamHat = ev.lamB, tB = isFinite(lamHat) && lamHat > 0 ? Math.cbrt(S.bfs / (lamHat * M.E)) : 0;
+  const tS = src.vmAway * S.fos / M.Sy;
+  const tD = S.dlim > 0 ? src.dLoad / (M.E * S.dlim) : 0;
+  const lamHat = src.lamB, tB = isFinite(lamHat) && lamHat > 0 ? Math.cbrt(S.bfs / (lamHat * M.E)) : 0;
   const tReq = Math.max(tS, tD, tB);
   const multi = d.caseIds.length > 1, cn = (k) => multi ? ` (load case ${d.caseIds[k || 0]})` : '';
-  const governs = (tReq === tB && tB > 0 ? 'buckling' + cn(ev.lamCase) : tReq === tD && tD > 0 ? 'deflection' + cn(ev.dCase) : 'stress' + cn(ev.vmCase));
+  const governs = (tReq === tB && tB > 0 ? 'buckling' + cn(src.lamCase) : tReq === tD && tD > 0 ? 'deflection' + cn(src.dCase) : 'stress' + cn(src.awayCase));
   const t = S.autoT ? gaugeUp(tReq) : S.tFix;
-  const sig = ev.vmMax / t, fos = M.Sy / sig, defl = ev.dLoad / (M.E * t), dmax = ev.dMax / (M.E * t);
+  const sig = src.vmAway / t, fos = M.Sy / sig, defl = src.dLoad / (M.E * t), dmax = Math.max(ev.dMax / (M.E * t), defl);
+  const hot = src.vmZone / t, hotWarn = hot > M.Sy / S.fos;
+
   const mass = M.rho * 1e-9 * area * t * 1000;
-  const Fd = d.Fs[ev.dCase || 0]; let Ftot = 0; for (let i = 0; i < Fd.length; i++) Ftot += Fd[i] * Fd[i]; Ftot = Math.sqrt(Ftot);
+  const Fd = d.Fs[src.dCase || 0]; let Ftot = 0; for (let i = 0; i < Fd.length; i++) Ftot += Fd[i] * Fd[i]; Ftot = Math.sqrt(Ftot);
   const blf = isFinite(lamHat) ? lamHat * M.E * t * t * t : Infinity;
-  const pass = fos >= S.fos - 1e-9 && (!(S.dlim > 0) || defl <= S.dlim + 1e-12) && blf >= S.bfs * (1 - 1e-9) && !ev.brokenLoads;
+  const pass = fos >= S.fos - 1e-9 && (!(S.dlim > 0) || defl <= S.dlim + 1e-12) && blf >= S.bfs * (1 - 1e-9) && !ev.brokenLoads && !src.brokenLoads && !(as && (as.sharp || as.outline));
   const thinPct = ev.nSolid ? ev.thinCount / ev.nSolid * 100 : 0;
   const webWarn = PROCESSES[S.proc].cut && t > S.minW * 1.5;
-  return { cn, multi, blf, governs, area, tReq, t, sig, fos, defl, dmax, mass, stiff: defl > 0 ? Ftot / defl : 0, pass, thinPct, webWarn, holes: ev.holes, added: ev.added * d.hx * d.hy };
+  return { src, ver, as, converged: !!(as && as.converged), hot, hotWarn, cn, multi, blf, governs, area, tReq, t, sig, fos, defl, dmax, mass, stiff: defl > 0 ? Ftot / defl : 0, pass, thinPct, webWarn, holes: ev.holes, added: ev.added * d.hx * d.hy };
 }
 function computeDistinct() {
   const ids = VARIANTS.map(v => v.id).filter(id => S.results[id] && S.results[id].ev);
@@ -199,9 +303,10 @@ function computeDistinct() {
   }
 }
 function recommended() {
-  let best = null, bm = Infinity;
-  for (const v of VARIANTS) { const m = metrics(S.results[v.id]); if (m && m.pass && m.mass < bm) { bm = m.mass; best = v.id; } }
-  return best;
+  // lightest design that meets the spec, preferring designs whose mesh check converged
+  const pick = (need) => { let best = null, bm = Infinity;
+    for (const v of VARIANTS) { const m = metrics(S.results[v.id]); if (m && m.pass && need(m) && m.mass < bm) { bm = m.mass; best = v.id; } } return best; };
+  return pick(m => !m.ver || m.converged) || pick(() => true);
 }
 
 // ---------------- canvas: main stage ----------------
@@ -299,7 +404,8 @@ function drawFeatures(g) {
       g.strokeStyle = f.type === 'void' ? muted : ink; g.lineWidth = 1.2; g.setLineDash(f.type === 'void' ? [5, 3] : []);
       g.globalAlpha = 0.85;
       if (f.shape === 'circle') { const [cx, cy] = P(f.cx, f.cy); g.beginPath(); g.arc(cx, cy, f.r * view.s, 0, Math.PI * 2); g.fill(); g.stroke(); }
-      else { const [x, y, w, h] = rectPx(f); g.fillRect(x, y, w, h); g.strokeRect(x, y, w, h); }
+      else { const [x, y, w, h] = rectPx(f), r = Math.min((f.rc || 0) * view.s, w / 2, h / 2);
+        g.beginPath(); if (r > 0 && g.roundRect) g.roundRect(x, y, w, h, r); else g.rect(x, y, w, h); g.fill(); g.stroke(); }
       g.restore();
     }
   }
@@ -460,7 +566,9 @@ function renderFeats() {
       ns++; row.innerHTML = `<span class="tag sup">Support ${ns}</span><select id="st${i}" aria-label="Support type"><option value="xy">Fixed (bolted)</option><option value="y">Slides horizontally</option><option value="x">Slides vertically</option></select>
         <span class="mono">(${fmt(Math.min(f.x0, f.x1), 0)}, ${fmt(Math.min(f.y0, f.y1), 0)}) to (${fmt(Math.max(f.x0, f.x1), 0)}, ${fmt(Math.max(f.y0, f.y1), 0)}) mm</span>`;
       const s = row.querySelector('select'); s.value = f.dof; s.addEventListener('change', e => { snapshot(); f.dof = e.target.value; markDirty(); draw(); });
-    } else if (f.type === 'void') { nv++; row.innerHTML = `<span class="tag">Keep-out ${nv}</span><span class="mono">${f.shape === 'circle' ? `Ø${fmt(2 * f.r, 1)} at (${fmt(f.cx, 1)}, ${fmt(f.cy, 1)})` : `${fmt(Math.abs(f.x1 - f.x0), 1)} × ${fmt(Math.abs(f.y1 - f.y0), 1)}`} mm</span>`; }
+    } else if (f.type === 'void') { nv++; row.innerHTML = `<span class="tag">Keep-out ${nv}</span><span class="mono">${f.shape === 'circle' ? `Ø${fmt(2 * f.r, 1)} at (${fmt(f.cx, 1)}, ${fmt(f.cy, 1)})` : `${fmt(Math.abs(f.x1 - f.x0), 1)} × ${fmt(Math.abs(f.y1 - f.y0), 1)}`} mm</span>`
+        + (f.shape === 'circle' ? '' : `<label>Corner R <input type="number" min="0" step="1" id="rc${i}" value="${f.rc || 0}"></label><span class="hint">mm</span>`);
+      const rcIn = row.querySelector(`#rc${i}`); if (rcIn) rcIn.addEventListener('change', e => { snapshot(); f.rc = Math.max(0, +e.target.value || 0); markDirty(); draw(); }); }
     else { nk++; row.innerHTML = `<span class="tag">Keep-solid ${nk}</span><span class="mono">${fmt(Math.abs(f.x1 - f.x0), 1)} × ${fmt(Math.abs(f.y1 - f.y0), 1)} mm</span>`; }
     const x = document.createElement('button'); x.className = 'x'; x.setAttribute('aria-label', 'Remove'); x.textContent = '×';
     x.addEventListener('click', () => { snapshot(); S.features.splice(i, 1); markDirty(); renderFeats(); draw(); }); row.appendChild(x);
@@ -512,20 +620,46 @@ function updateCard(id) {
   st.innerHTML = `<span>Mass</span><b>${fmt(m.mass, m.mass < 100 ? 1 : 0)} g</b><span>Plate</span><b>${fmt(m.t, 1)} mm</b><span>FoS</span><b>${fmt(m.fos, 2)}</b><span>δ load</span><b>${fmt(m.defl, 3)} mm</b>`;
   const rec = recommended();
   ch.innerHTML = (id === rec ? '<span class="chip rec">Recommended</span>' : '') + (m.pass ? '<span class="chip ok">Meets spec</span>' : '<span class="chip bad">Fails spec</span>')
-    + (R.ev.brokenLoads ? '<span class="chip bad">Load not carried</span>' : '') + (m.thinPct > 5 ? '<span class="chip warn">Thin webs</span>' : '') + (S.autoT && m.governs.startsWith('buckling') ? '<span class="chip warn">Buckling governs</span>' : '');
+    + (R.ev.brokenLoads ? '<span class="chip bad">Load not carried</span>' : '') + (m.thinPct > 5 ? '<span class="chip warn">Thin webs</span>' : '') + (S.autoT && m.governs.startsWith('buckling') ? '<span class="chip warn">Buckling governs</span>' : '')
+    + (m.as && m.as.outline ? '<span class="chip bad">Outline loses material</span>' : m.as && m.as.sharp ? '<span class="chip bad">Sharp junction</span>' : '')
+    + (m.ver ? (m.converged ? '<span class="chip ok">Mesh-checked</span>' : m.as.outline || m.as.sharp ? '' : '<span class="chip warn">Mesh-sensitive</span>') : R.ver && R.ver.status === 'running' ? '<span class="chip">Checking mesh…</span>' : '')
+    + (m.hotWarn ? '<span class="chip warn">Hot spot at support</span>' : '');
 }
 function renderSummary() {
   const r = S.run; if (!r) return;
   const prog = VARIANTS.reduce((a, v) => a + (S.results[v.id].status === 'done' ? 110 : S.results[v.id].it), 0) / (VARIANTS.length * 110);
-  $('prog').style.width = (r.done === r.total ? 100 : prog * 100) + '%';
+  const vf = S.verify, vprog = vf ? vf.done / vf.total : 1;
+  $('prog').style.width = (r.done === r.total ? 100 * vprog : prog * 100) + '%';
   if (r.done < r.total) { $('verdict').textContent = `Growing ${VARIANTS.length} designs from your load case…`; $('verdictSub').textContent = `${r.done} of ${r.total} finished. Watch them form on the board and in the cards below.`; return; }
   const rec = recommended(), M = MATERIALS[S.mat], mb = metrics(S.results.base);
   const secs = ((r.finished - r.started) / 1000).toFixed(0);
-  if (!rec) { $('verdict').textContent = 'No design meets the requirements at the chosen thickness.'; $('verdictSub').textContent = S.autoT ? 'Check the load path: every load needs material connecting it to a support.' : 'Turn on thickness sizing, or raise the plate thickness.'; return; }
+  if (!rec) {
+    $('verdict').textContent = 'No design meets the requirements.';
+    const ms = VARIANTS.map(x => [x.id, metrics(S.results[x.id])]).filter(([, mm]) => mm);
+    const rej = ms.filter(([, mm]) => mm.as && (mm.as.sharp || mm.as.outline)).map(([id]) => id);
+    const broken = ms.filter(([id]) => S.results[id].ev.brokenLoads).map(([id]) => id);
+    const corners = sharpKeepoutCorners();
+    let why = rej.length ? `The mesh check rejected ${rej.join(', ')}: stress keeps rising at a sharp corner or the cut outline loses material. ` : '';
+    if (broken.length) why += `In ${broken.join(', ')} a load is not connected to material. `;
+    if (!S.autoT) why += 'At the fixed thickness the requirements are not met: turn on thickness sizing or raise the thickness. ';
+    if (!why) why = 'Check the load path: every load needs material connecting it to a support.';
+    $('verdictSub').textContent = why;
+    if (corners.length) {
+      const fixR = Math.ceil(Math.max(S.minW, 3 * S.lastDisc.h, 5));  // a fillet spanning at least 3 optimizer elements
+      const b = document.createElement('button'); b.className = 'btn'; b.style.marginLeft = '8px'; b.textContent = `Round keep-out corners to R ${fmt(fixR, 0)} mm and regenerate`;
+      b.addEventListener('click', () => { snapshot(); for (const i of corners) S.features[i].rc = Math.max(S.features[i].rc || 0, fixR); renderFeats(); startRun(); });
+      $('verdictSub').append('The peaks sit at a square corner of a keep-out zone, which is a true stress singularity: real parts need a fillet there.', b);
+    }
+    return; }
   const m = metrics(S.results[rec]), v = VARIANTS.find(x => x.id === rec);
   $('verdict').innerHTML = `Recommended: <span style="color:var(--accent)">${rec} · ${v.name}</span>, ${fmt(m.t, 1)} mm ${M.name}, <span class="num">${fmt(m.mass, m.mass < 100 ? 1 : 0)} g</span>`;
   const save = mb ? (1 - m.mass / mb.mass) * 100 : 0;
-  $('verdictSub').textContent = `Factor of safety ${fmt(m.fos, 2)}, buckling load factor ${isFinite(m.blf) ? fmt(m.blf, 1) : 'n/a'}, deflection at the load ${fmt(m.defl, 3)} mm. Thickness set by ${m.governs}.${m.multi ? ` Checked against all ${S.lastDisc.caseIds.length} load cases.` : ''} ${save > 0 ? fmt(save, 0) + '% lighter than a solid plate sized to the same requirement (' + fmt(mb.mass, 0) + ' g at ' + fmt(mb.t, 1) + ' mm).' : ''} Solved in ${secs} s.`;
+  $('verdictSub').textContent = `Factor of safety ${fmt(m.fos, 2)}, buckling load factor ${isFinite(m.blf) ? fmt(m.blf, 1) : 'n/a'}, deflection at the load ${fmt(m.defl, 3)} mm. Thickness set by ${m.governs}.${m.multi ? ` Checked against all ${S.lastDisc.caseIds.length} load cases.` : ''} ${save > 0 ? fmt(save, 0) + '% lighter than a solid plate sized to the same requirement (' + fmt(mb.mass, 0) + ' g at ' + fmt(mb.t, 1) + ' mm).' : ''} Solved in ${secs} s.`
+    + (vf && vf.done < vf.total ? ` Checking every design on ${vf.levels.map(x => x + '×').join(', ')} meshes of the cut outline: ${vf.done} of ${vf.total}.`
+      : m.ver ? (m.converged ? ` Mesh check passed: sized on the converged peak stress (${fmt(m.as.extrapPct, 0)}% above the finest mesh) and the fine-mesh deflection and buckling.`
+        : ` Mesh check: deflection or buckling still moved more than 5% between the finest meshes, so treat this design's numbers as approximate (see the mesh check below).`)
+        + (() => { const bad = VARIANTS.filter(x => { const mm = metrics(S.results[x.id]); return mm && mm.as && (mm.as.sharp || mm.as.outline); }).map(x => x.id);
+            return bad.length ? ` Rejected by the mesh check: ${bad.join(', ')}.` : ''; })() : '');
   if (m.webWarn) { const b = document.createElement('button'); b.className = 'btn'; b.style.marginLeft = '8px'; b.textContent = `Make webs at least ${fmt(m.t, 1)} mm (plate thickness) and regenerate`;
     b.addEventListener('click', () => { S.minW = m.t; S.proc = 'custom'; syncInputs(); startRun(); }); $('verdictSub').append(' For cut plate, webs thinner than the plate are hard to cut cleanly.', b); }
 }
@@ -540,11 +674,12 @@ function renderDetail() {
     ['Mass', `${fmt(m.mass, 1)} g`],
     ['Material area', `${fmt(m.area, 0)} mm²`],
     ...(m.multi ? [['Load cases checked', `${d.caseIds.length}, worst case governs each check`]] : []),
-    ['Peak von Mises stress', `${fmt(m.sig, 1)} MPa${m.cn(R.ev.vmCase)}`],
+    ['Peak stress, away from supports and loads', `${fmt(m.sig, 1)} MPa${m.cn(m.src.awayCase)}`],
+    ['Hot spot within ' + fmt(EXCL * d.h, 1) + ' mm of a support or load', `<span style="color:${m.hotWarn ? 'var(--warn)' : 'inherit'}">${fmt(m.hot, 1)} MPa</span>`],
     ['Factor of safety on yield', `${fmt(m.fos, 2)} (target ${fmt(S.fos, 2)})`],
-    ['Buckling load factor', isFinite(m.blf) ? `${fmt(m.blf, 2)} (target ${fmt(S.bfs, 1)})${m.cn(R.ev.lamCase)}` : 'No buckling (no compression)'],
+    ['Buckling load factor', isFinite(m.blf) ? `${fmt(m.blf, 2)} (target ${fmt(S.bfs, 1)})${m.cn(m.src.lamCase)}` : 'No buckling (no compression)'],
     ['Thickness set by', S.autoT ? m.governs : 'your fixed value'],
-    ['Deflection at load', `${fmt(m.defl, 4)} mm${m.cn(R.ev.dCase)}`],
+    ['Deflection at load', `${fmt(m.defl, 4)} mm${m.cn(m.src.dCase)}`],
     ['Max deflection anywhere', `${fmt(m.dmax, 4)} mm`],
     ['Stiffness at load', `${fmt(m.stiff / 1000, 2)} kN/mm`],
     ['Through-holes', `${m.holes}`],
@@ -556,7 +691,26 @@ function renderDetail() {
   rows.push(['Mesh', `${d.nelx} × ${d.nely}, ${fmt(d.h, 2)} mm elements`]);
   tb.innerHTML = rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('') +
     (m.webWarn ? `<tr><td colspan="2" style="text-align:left;color:var(--warn);font-family:var(--font-body)">For cut plate, keep webs at least as wide as the plate is thick (${fmt(m.t, 1)} mm). Raise Min member width to ${fmt(m.t, 1)} and regenerate.</td></tr>` : '') +
-    (R.ev.brokenLoads ? `<tr><td colspan="2" style="text-align:left;color:var(--bad);font-family:var(--font-body)">A load is not connected to material. Try a more robust variant or add a keep-solid zone at the load.</td></tr>` : '');
+    (R.ev.brokenLoads ? `<tr><td colspan="2" style="text-align:left;color:var(--bad);font-family:var(--font-body)">A load is not connected to material. Try a more robust variant or add a keep-solid zone at the load.</td></tr>` : '') +
+    (m.hotWarn ? `<tr><td colspan="2" style="text-align:left;color:var(--warn);font-family:var(--font-body)">Stress right at a support or load point exceeds the allowable ${fmt(MATERIALS[S.mat].Sy / S.fos, 0)} MPa. That value depends on how the part is held (bolt, clamp, washer), not on this shape: detail the joint, or add a keep-solid pad there.</td></tr>` : '');
+  renderVerify(R, m);
+}
+function renderVerify(R, m) {
+  const box = $('verifyBox'); if (!box) return;
+  if (!R || !R.ver) { box.innerHTML = ''; return; }
+  const M = MATERIALS[S.mat], t = m.t, ver = R.ver;
+  const name = l => l.r === 'opt' ? 'Optimizer mesh (stair-step)' : l.r === 1 ? 'Cut outline, same mesh' : `Cut outline, ${l.r}× finer`;
+  const rows = ver.levels.map(l => `<tr><td>${name(l)}</td><td>${l.nel.toLocaleString('en-IN')}</td><td>${fmt(l.vmAway / t, 1)}</td><td>${fmt(l.dLoad / (M.E * t), 4)}</td><td>${!l.bk ? '·' : isFinite(l.lamB) ? fmt(l.lamB * M.E * t ** 3, 2) : '–'}</td></tr>`).join('')
+    + (m.as ? `<tr><td><b>Used for sizing</b></td><td></td><td><b>${fmt(m.as.est / t, 1)}</b></td><td><b>${fmt(m.src.dLoad / (M.E * t), 4)}</b></td><td><b>${isFinite(m.src.lamB) ? fmt(m.src.lamB * M.E * t ** 3, 2) : '–'}</b></td></tr>` : '');
+  const a = m.as, pct = (v) => v === null ? 'n/a' : fmt(v, 1) + '%';
+  const status = ver.status === 'running' ? `<p class="hint">Analysing finer meshes…</p>`
+    : ver.status === 'error' ? `<p class="hint" style="color:var(--bad)">The mesh check failed for this design.</p>`
+    : `<p class="hint" style="color:${m.converged ? 'var(--ok)' : 'var(--warn)'}">${m.converged ? 'Converged.' : 'Mesh-sensitive.'} Deflection changed ${pct(a.dChange)} and buckling ${pct(a.bChange)} between the two finest meshes (target 5%).
+       ${S.dlim > 0 ? '' : 'No deflection limit is set, so deflection is reported but does not have to converge. '}Peak stress rose ${pct(a.sChange)} on the last refinement, as expected at rounded junctions and bending surfaces, so it is extrapolated (first order) to ${fmt(a.extrapPct, 0)}% above the finest mesh.
+       ${a.outline ? '<b>The cut outline loses material:</b> smoothing the layout into a cuttable profile thins or severs a member, and the stress jumps. Not usable as is; pick a design with bolder webs or raise the minimum member width.'
+         : a.sharp ? '<b>A junction behaves like a sharp corner and its stress is not settling.</b> Raise the minimum member width or pick a design with bolder webs.' : ''}
+       Stress within ${fmt(EXCL * S.lastDisc.h, 1)} mm of supports and loads is shown as the hot spot. · = not computed on this mesh.</p>`;
+  box.innerHTML = `<h3 style="margin-top:14px">Mesh check at ${fmt(t, 1)} mm</h3><div style="overflow-x:auto"><table class="metrics verify"><thead><tr><td>Mesh</td><td>Elements</td><td>Stress (MPa)</td><td>Deflection (mm)</td><td>Buckling factor</td></tr></thead><tbody>${rows}</tbody></table></div>${status}`;
 }
 function renderPareto() {
   const svg = $('pareto'), pts = [];
@@ -707,11 +861,11 @@ function makeSVG(loops, m) {
 }
 function makeCSV() {
   const M = MATERIALS[S.mat];
-  const head = ['design', 'name', 'meets_spec', 'plate_thickness_mm', 'required_thickness_mm', 'mass_g', 'area_mm2', 'peak_von_mises_MPa', 'factor_of_safety', 'deflection_at_load_mm', 'max_deflection_mm', 'stiffness_N_per_mm', 'buckling_load_factor', 'thickness_set_by', 'stress_case', 'deflection_case', 'buckling_case', 'holes', 'below_min_width_pct', 'distinct_pct'];
+  const head = ['design', 'name', 'meets_spec', 'plate_thickness_mm', 'required_thickness_mm', 'mass_g', 'area_mm2', 'peak_von_mises_MPa', 'factor_of_safety', 'deflection_at_load_mm', 'max_deflection_mm', 'stiffness_N_per_mm', 'buckling_load_factor', 'thickness_set_by', 'stress_case', 'deflection_case', 'buckling_case', 'holes', 'below_min_width_pct', 'distinct_pct', 'mesh_checked', 'stress_extrapolation_pct', 'hotspot_at_supports_MPa'];
   const rows = [head.join(',')];
   for (const id of ['base', ...VARIANTS.map(v => v.id)]) { const R = S.results[id], m = metrics(R); if (!m) continue;
     const name = id === 'base' ? 'Solid plate' : VARIANTS.find(v => v.id === id).name;
-    rows.push([id, `"${name}"`, m.pass, m.t, m.tReq.toFixed(3), m.mass.toFixed(2), m.area.toFixed(1), m.sig.toFixed(2), m.fos.toFixed(3), m.defl.toFixed(5), m.dmax.toFixed(5), m.stiff.toFixed(1), isFinite(m.blf) ? m.blf.toFixed(3) : 'none', `"${m.governs}"`, S.lastDisc.caseIds[R.ev.vmCase || 0], S.lastDisc.caseIds[R.ev.dCase || 0], isFinite(m.blf) ? S.lastDisc.caseIds[R.ev.lamCase || 0] : '', m.holes, m.thinPct.toFixed(2), R.distinct !== undefined ? R.distinct.toFixed(1) : ''].join(',')); }
+    rows.push([id, `"${name}"`, m.pass, m.t, m.tReq.toFixed(3), m.mass.toFixed(2), m.area.toFixed(1), m.sig.toFixed(2), m.fos.toFixed(3), m.defl.toFixed(5), m.dmax.toFixed(5), m.stiff.toFixed(1), isFinite(m.blf) ? m.blf.toFixed(3) : 'none', `"${m.governs}"`, S.lastDisc.caseIds[R.ev.vmCase || 0], S.lastDisc.caseIds[R.ev.dCase || 0], isFinite(m.blf) ? S.lastDisc.caseIds[R.ev.lamCase || 0] : '', m.holes, m.thinPct.toFixed(2), R.distinct !== undefined ? R.distinct.toFixed(1) : '', !!m.ver, m.as ? m.as.extrapPct.toFixed(1) : '', m.hot.toFixed(2)].join(',')); }
   rows.push('', 'per_load_case', 'design,load_case,peak_von_mises_MPa,deflection_at_load_mm,buckling_load_factor');
   for (const id of ['base', ...VARIANTS.map(v => v.id)]) { const R = S.results[id], m = metrics(R); if (!m) continue;
     const E = MATERIALS[S.mat].E;
