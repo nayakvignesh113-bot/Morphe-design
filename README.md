@@ -6,10 +6,11 @@ There is no install and no server. Everything runs client-side in one `index.htm
 
 ## Use
 
-1. Pick a template (cantilever, simply supported beam, L-bracket, wall shelf bracket) or start from a blank plate.
+1. Pick a template (cantilever, simply supported beam, L-bracket, wall shelf bracket, bracket with three load cases) or start from a blank plate.
 2. On the drawing board:
    - **Support**: drag along an edge, or tap for a bolt point. Choose fixed, slides horizontally or slides vertically.
    - **Load**: tap for a 1 kN downward load, or drag to set its direction. Edit Fx/Fy in N.
+   - **Load cases**: press **+ Load case** for a separate situation the part must survive (e.g. working load, a sideways knock, reversed load). New loads go into the active case; move a load between cases from its row. Loads in the same case act together.
    - **Keep-out / Keep-solid**: mark clearances, flanges and mounting faces.
 3. Set the material, the manufacturing process (this sets the minimum member width), the target factor of safety, the buckling load factor and the deflection limit.
 4. Press **Generate designs**. The designs form live. The recommended one is marked, and the mass-vs-deflection chart shows the trade-off.
@@ -21,10 +22,11 @@ There is no install and no server. Everything runs client-side in one `index.htm
 | Step | What is done |
 |---|---|
 | Analysis | 2D plane stress, 4-node bilinear quads, banded Cholesky direct solver |
-| Optimization | SIMP (p = 3), density filter, Heaviside projection with β continuation 1 → 16, optimality-criteria update |
+| Optimization | SIMP (p = 3), density filter, Heaviside projection with β continuation 1 → 16, optimality-criteria update. With several load cases the summed compliance is minimized (one factorization, one back-solve per case) |
 | Design family | Volume fraction 0.20 / 0.30 / 0.45 × two member-size filters (process minimum width, and 1.8× that) |
 | Clean-up | Threshold at 0.5; remove islands not connected to a support; fill enclosed slivers smaller than a min-width square; widen members narrower than the minimum width (morphological opening check) |
 | Buckling | Linear eigenvalue of out-of-plane plate buckling: ACM 12-dof plate elements, geometric stiffness from the in-plane stresses, shifted power iteration for the smallest positive load factor. Bolted supports clamped, sliding supports simply supported |
+| Load cases | Every design is analysed for every case: stress, deflection and buckling are each taken from the worst case, and the report names which case governs |
 | Sizing | Solved with E = 1, t = 1. Stress ∝ 1/t, deflection ∝ 1/(E·t), buckling load ∝ E·t³, so each required thickness is exact; the largest one wins, rounded up to a standard gauge |
 | Stress | Element-centroid von Mises. Elements touching a point load are excluded from the peak (a point load has no finite stress) |
 | Export | Marching squares on the cleaned layout → Douglas–Peucker simplification → closed DXF polylines in mm |
@@ -36,6 +38,8 @@ There is no install and no server. Everything runs client-side in one `index.htm
 | Check | Reference | Result |
 |---|---|---|
 | MBB beam 60×20, compliance history | Independent Python/SciPy port of Andreassen et al. (2011) 88-line code (`tests/ref88.py`) | Identical to 4+ significant figures over 60 iterations |
+| MBB beam, two load cases, summed compliance | Same reference code with a second load column | Identical over 60 iterations |
+| Load-case envelope (case 2 = 2 × case 1) | Linearity: stress ×2, deflection ×2, buckling factor ×0.5, case 2 flagged | Exact |
 | Cantilever 200×20 mm tip deflection | Timoshenko beam theory (bending + shear) | −0.02 % |
 | Mid-span bending stress | Mc/I | −0.12 % |
 | Simply supported square plate, uniaxial compression | N_cr = 4π²D/b² | −0.07 % |
@@ -44,7 +48,7 @@ There is no install and no server. Everything runs client-side in one `index.htm
 
 ## Limits
 
-Linear-elastic, static, in-plane loads, uniform thickness, a single load case. Buckling is a linear (bifurcation) check, so keep the buckling load factor at 3 or more to cover imperfections. It does **not** check out-of-plane applied loads, fatigue or bolt-hole bearing. Before you release a part, run the exported geometry through a full FEA.
+Linear-elastic, static, in-plane loads, uniform thickness. Buckling is a linear (bifurcation) check, so keep the buckling load factor at 3 or more to cover imperfections. It does **not** check out-of-plane applied loads, fatigue or bolt-hole bearing. Before you release a part, run the exported geometry through a full FEA.
 
 ## Develop
 

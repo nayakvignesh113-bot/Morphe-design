@@ -48,17 +48,24 @@ const PRESETS = {
     { type: 'load', x: 50, y: 150, fx: 0, fy: -400 },
     { type: 'load', x: 100, y: 150, fx: 0, fy: -400 },
     { type: 'load', x: 148, y: 150, fx: 0, fy: -400 } ] }),
+  multicase: () => ({ W: 200, H: 100, sym: false, features: [
+    { type: 'fix', dof: 'xy', x0: 0, y0: 0, x1: 0, y1: 100 },
+    { type: 'load', lc: 1, x: 200, y: 50, fx: 0, fy: -2000 },
+    { type: 'load', lc: 2, x: 200, y: 50, fx: -1500, fy: 0 },
+    { type: 'load', lc: 3, x: 200, y: 50, fx: 0, fy: 1000 } ] }),
   blank: () => ({ W: 200, H: 100, sym: false, features: [] }),
 };
 
 // ---------------- state ----------------
 const S = {
   preset: 'cantilever', W: 200, H: 100, res: 'std', sym: false,
-  mat: 'al6061', proc: 'laser', minW: 3, fos: 2, bfs: 3, dlim: 0, autoT: true, tFix: 5,
+  lc: 1, nLC: 1, mat: 'al6061', proc: 'laser', minW: 3, fos: 2, bfs: 3, dlim: 0, autoT: true, tFix: 5,
   features: [], tool: 'load', supType: 'xy', voidShape: 'rect', view: 'shape',
   run: null, results: {}, selected: 'B', dirty: false, lastDisc: null,
 };
 const $ = (id) => document.getElementById(id);
+const caseOf = (f) => f.lc || 1;
+const numCases = () => Math.max(S.nLC || 1, ...S.features.filter(f => f.type === 'load').map(caseOf));
 const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const fmt = (v, d = 1) => (v === undefined || v === null || !isFinite(v)) ? '–' : v.toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d });
 let toastT;
@@ -68,6 +75,7 @@ function applyPreset(key, noSnap) {
   if (!noSnap) snapshot();
   const p = PRESETS[key]();
   S.preset = key; S.W = p.W; S.H = p.H; S.sym = p.sym; S.features = p.features;
+  S.nLC = Math.max(1, ...p.features.filter(f => f.type === 'load').map(f => f.lc || 1)); S.lc = 1;
   syncInputs(); markDirty(); draw();
 }
 
@@ -81,7 +89,7 @@ function discretize() {
   const colwise = nely <= nelx;
   const node = colwise ? (ix, iy) => ix * (nely + 1) + iy : (ix, iy) => iy * (nelx + 1) + ix;
   const nodeXY = (ix, iy) => [ix * hx, S.H - iy * hy];
-  const passive = new Int8Array(nel), F = new Float64Array(ndof), fixed = new Uint8Array(ndof);
+  const passive = new Int8Array(nel), fixed = new Uint8Array(ndof);
   const inside = (f, x, y) => f.shape === 'circle' ? Math.hypot(x - f.cx, y - f.cy) <= f.r
     : x >= Math.min(f.x0, f.x1) && x <= Math.max(f.x0, f.x1) && y >= Math.min(f.y0, f.y1) && y <= Math.max(f.y0, f.y1);
   const center = (ix, iy) => [(ix + 0.5) * hx, S.H - (iy + 0.5) * hy];
@@ -102,9 +110,11 @@ function discretize() {
     if (hit.length <= 5) for (const [ix, iy] of hit) pads.push(nodeXY(ix, iy));
   }
   let nLoads = 0, loadInVoid = false;
+  const caseIds = [...new Set(S.features.filter(f => f.type === 'load').map(caseOf))].sort((a, b) => a - b);
+  const Fs = caseIds.map(() => new Float64Array(ndof));
   for (const f of S.features) if (f.type === 'load') {
-    const [ix, iy] = nearest(f.x, f.y), n = node(ix, iy);
-    F[2 * n] += f.fx; F[2 * n + 1] += f.fy; nLoads++;
+    const [ix, iy] = nearest(f.x, f.y), n = node(ix, iy), Fk = Fs[caseIds.indexOf(caseOf(f))];
+    Fk[2 * n] += f.fx; Fk[2 * n + 1] += f.fy; nLoads++;
     pads.push(nodeXY(ix, iy));
   }
   for (const [px, py] of pads) for (let ix = 0; ix < nelx; ix++) for (let iy = 0; iy < nely; iy++) {
@@ -116,7 +126,7 @@ function discretize() {
   if (nFixX === 0 || nFixY === 0 || nFixX + nFixY < 3) errors.push('The part can still move or spin. Add a fixed support, or supports that hold it both horizontally and vertically.');
   if (loadInVoid) errors.push('A load or support sits inside a keep-out zone. Move it onto material.');
   const rmin0 = Math.max(1.5, 0.6 * S.minW / h);
-  return { W: S.W, H: S.H, nelx, nely, hx, hy, h, nel, ndof, passive, F, fixed, errors, rmin0, nu: MATERIALS[S.mat].nu };
+  return { W: S.W, H: S.H, nelx, nely, hx, hy, h, nel, ndof, passive, Fs, caseIds, fixed, errors, rmin0, nu: MATERIALS[S.mat].nu };
 }
 
 // ---------------- worker pool ----------------
@@ -130,7 +140,7 @@ function startRun() {
   S.run = { runId, disc: d, queue: [], active: 0, done: 0, total: VARIANTS.length + 1, started: performance.now() };
   S.results = {}; S.dirty = false; S.lastDisc = d; showBanner(symmetryIssue());
   const rB = Math.max(2.5, 1.8 * d.rmin0);
-  const base = { runId, nelx: d.nelx, nely: d.nely, nu: d.nu, F: d.F, fixed: d.fixed, passive: d.passive, h: d.h, minWidth: S.minW, symX: S.sym, enforceWidth: true };
+  const base = { runId, nelx: d.nelx, nely: d.nely, nu: d.nu, Fs: d.Fs, fixed: d.fixed, passive: d.passive, h: d.h, minWidth: S.minW, symX: S.sym, enforceWidth: true };
   S.run.queue.push({ ...base, jobId: 'base', kind: 'eval' });
   for (const v of VARIANTS) S.run.queue.push({ ...base, jobId: v.id, kind: 'opt', vf: v.vf, rmin: v.bold ? rB : d.rmin0, maxIter: 110, penal: 3 });
   for (const j of S.run.queue) S.results[j.jobId] = { id: j.jobId, status: 'queued', it: 0, x: null, ev: null };
@@ -167,16 +177,17 @@ function metrics(R) {
   const tD = S.dlim > 0 ? ev.dLoad / (M.E * S.dlim) : 0;
   const lamHat = ev.lamB, tB = isFinite(lamHat) && lamHat > 0 ? Math.cbrt(S.bfs / (lamHat * M.E)) : 0;
   const tReq = Math.max(tS, tD, tB);
-  const governs = tReq === tB && tB > 0 ? 'buckling' : tReq === tD && tD > 0 ? 'deflection' : 'stress';
+  const multi = d.caseIds.length > 1, cn = (k) => multi ? ` (load case ${d.caseIds[k || 0]})` : '';
+  const governs = (tReq === tB && tB > 0 ? 'buckling' + cn(ev.lamCase) : tReq === tD && tD > 0 ? 'deflection' + cn(ev.dCase) : 'stress' + cn(ev.vmCase));
   const t = S.autoT ? gaugeUp(tReq) : S.tFix;
   const sig = ev.vmMax / t, fos = M.Sy / sig, defl = ev.dLoad / (M.E * t), dmax = ev.dMax / (M.E * t);
   const mass = M.rho * 1e-9 * area * t * 1000;
-  let Ftot = 0; for (let i = 0; i < d.F.length; i++) Ftot += d.F[i] * d.F[i]; Ftot = Math.sqrt(Ftot);
+  const Fd = d.Fs[ev.dCase || 0]; let Ftot = 0; for (let i = 0; i < Fd.length; i++) Ftot += Fd[i] * Fd[i]; Ftot = Math.sqrt(Ftot);
   const blf = isFinite(lamHat) ? lamHat * M.E * t * t * t : Infinity;
   const pass = fos >= S.fos - 1e-9 && (!(S.dlim > 0) || defl <= S.dlim + 1e-12) && blf >= S.bfs * (1 - 1e-9) && !ev.brokenLoads;
   const thinPct = ev.nSolid ? ev.thinCount / ev.nSolid * 100 : 0;
   const webWarn = PROCESSES[S.proc].cut && t > S.minW * 1.5;
-  return { blf, governs, area, tReq, t, sig, fos, defl, dmax, mass, stiff: defl > 0 ? Ftot / defl : 0, pass, thinPct, webWarn, holes: ev.holes, added: ev.added * d.hx * d.hy };
+  return { cn, multi, blf, governs, area, tReq, t, sig, fos, defl, dmax, mass, stiff: defl > 0 ? Ftot / defl : 0, pass, thinPct, webWarn, holes: ev.holes, added: ev.added * d.hx * d.hy };
 }
 function computeDistinct() {
   const ids = VARIANTS.map(v => v.id).filter(id => S.results[id] && S.results[id].ev);
@@ -307,17 +318,22 @@ function drawFeatures(g) {
     }
     g.restore();
   }
+  const multiLC = numCases() > 1, sameSpot = {};
   for (const f of S.features) if (f.type === 'load') {
     const mag = Math.hypot(f.fx, f.fy) || 1, [tx, ty] = P(f.x, f.y);
+    const spot = Math.round(tx / 4) + ',' + Math.round(ty / 4), nth = sameSpot[spot] = (sameSpot[spot] || 0) + 1;
     const ux = f.fx / mag, uy = -f.fy / mag, L = 46;
     const sx = tx - ux * L, sy = ty - uy * L;
     g.save(); g.strokeStyle = load; g.fillStyle = load; g.lineWidth = 2.5;
+    if (multiLC && caseOf(f) !== S.lc) { g.globalAlpha = 0.4; g.setLineDash([5, 3]); }
     g.beginPath(); g.moveTo(sx, sy); g.lineTo(tx - ux * 8, ty - uy * 8); g.stroke();
     g.beginPath(); g.moveTo(tx, ty); g.lineTo(tx - ux * 11 - uy * 5, ty - uy * 11 + ux * 5); g.lineTo(tx - ux * 11 + uy * 5, ty - uy * 11 - ux * 5); g.closePath(); g.fill();
     g.font = `600 12px ${css('--font-mono')}`; g.textAlign = 'center'; g.textBaseline = 'middle';
-    const label = mag >= 1000 ? fmt(mag / 1000, 2) + ' kN' : fmt(mag, 0) + ' N';
-    const lx = Math.max(28, Math.min(view.cw - 28, sx - ux * 14 + (Math.abs(uy) > .7 ? (tx > view.cw - 60 ? -26 : 0) : 0)));
-    g.fillText(label, lx, sy - uy * 12 + (Math.abs(uy) > .7 ? (uy > 0 ? -2 : 2) : 0));
+    const label = (multiLC ? `C${caseOf(f)} ` : '') + (mag >= 1000 ? fmt(mag / 1000, 2) + ' kN' : fmt(mag, 0) + ' N');
+    g.setLineDash([]);
+    const tw = g.measureText(label).width / 2 + 4;
+    const lx = Math.max(tw, Math.min(view.cw - tw, sx - ux * 14 + (Math.abs(uy) > .7 ? (tx > view.cw - 60 ? -26 : 0) : 0)));
+    g.fillText(label, lx, sy - uy * 12 + (Math.abs(uy) > .7 ? (uy > 0 ? -2 : 2) : 0) + (nth > 1 && Math.abs(uy) <= .7 ? (nth - 1) * 14 : 0));
     g.restore();
   }
 }
@@ -357,10 +373,10 @@ function drawLegend() {
   const L = $('legend'), m = metrics(S.results[S.selected]);
   if (S.view === 'stress' && m) {
     const M = MATERIALS[S.mat];
-    L.innerHTML = `<span>von Mises at ${fmt(m.t, 1)} mm</span><canvas id="cbar" width="160" height="10"></canvas><span class="mono">0 → ${fmt(M.Sy / S.fos, 0)} MPa (allowable = yield ÷ FoS)</span><span>· peak ${fmt(m.sig, 0)} MPa · yellow means fully used</span>`;
+    L.innerHTML = `<span>von Mises at ${fmt(m.t, 1)} mm${m.multi ? ', worst of all load cases' : ''}</span><canvas id="cbar" width="160" height="10"></canvas><span class="mono">0 → ${fmt(M.Sy / S.fos, 0)} MPa (allowable = yield ÷ FoS)</span><span>· peak ${fmt(m.sig, 0)} MPa · yellow means fully used</span>`;
     const c = $('cbar').getContext('2d'); for (let i = 0; i < 160; i++) { const [r, gg, b] = colormap(i / 159); c.fillStyle = `rgb(${r},${gg},${b})`; c.fillRect(i, 0, 1, 10); }
-  } else if (S.view === 'deform' && m) L.innerHTML = `<span>Deflected shape, exaggerated. Real deflection at the load: <b class="mono">${fmt(m.defl, 3)} mm</b></span>`;
-  else if (S.view === 'buckle' && m) L.innerHTML = isFinite(m.blf) ? `<span>First out-of-plane buckling mode (relative amplitude). It buckles at <b class="mono">${fmt(m.blf, 2)}×</b> the applied loads at ${fmt(m.t, 1)} mm.</span>` : '<span>No part of this design is in compression, so it cannot buckle.</span>';
+  } else if (S.view === 'deform' && m) L.innerHTML = `<span>Deflected shape, exaggerated. Real deflection at the load: <b class="mono">${fmt(m.defl, 3)} mm</b>${m.cn(S.results[S.selected].ev.dCase)}</span>`;
+  else if (S.view === 'buckle' && m) L.innerHTML = isFinite(m.blf) ? `<span>First out-of-plane buckling mode (relative amplitude). It buckles at <b class="mono">${fmt(m.blf, 2)}×</b> the applied loads at ${fmt(m.t, 1)} mm${m.cn(S.results[S.selected].ev.lamCase)}.</span>` : '<span>No part of this design is in compression, so it cannot buckle.</span>';
   else if (S.view === 'thin' && m) L.innerHTML = `<span>Red: material narrower than ${fmt(S.minW, 1)} mm · ${fmt(m.thinPct, 1)}% of the part</span>`;
   else L.innerHTML = '';
 }
@@ -386,7 +402,7 @@ stage.addEventListener('pointerup', (ev) => {
   else if (S.tool === 'load') {
     let fx = 0, fy = -1000;
     if (d.moved) { const ang = Math.atan2(d.y1 - d.y0, d.x1 - d.x0), sn = Math.round(ang / (Math.PI / 12)) * (Math.PI / 12); fx = Math.round(1000 * Math.cos(sn)); fy = Math.round(1000 * Math.sin(sn)); }
-    S.features.push({ type: 'load', x: snap(d.x0), y: snap(d.y0), fx, fy });
+    S.features.push({ type: 'load', lc: S.lc, x: snap(d.x0), y: snap(d.y0), fx, fy });
   } else if (S.tool === 'support') {
     S.features.push({ type: 'fix', dof: S.supType, x0: snap(d.x0), y0: snap(d.y0), x1: snap(d.x1), y1: snap(d.y1) });
   } else if (S.tool === 'void' || S.tool === 'solid') {
@@ -423,6 +439,10 @@ function setTool(t) { S.tool = t; document.querySelectorAll('#tools button').for
 document.querySelectorAll('#tools button').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
 document.querySelectorAll('#views button').forEach(b => b.addEventListener('click', () => { S.view = b.dataset.view; document.querySelectorAll('#views button').forEach(c => c.setAttribute('aria-pressed', c === b)); draw(); }));
 $('suptype').addEventListener('change', e => S.supType = e.target.value);
+function renderCases() { const sel = $('lcsel'), n = numCases(); if (S.lc > n) S.lc = n;
+  sel.innerHTML = Array.from({ length: n }, (_, k) => `<option value="${k + 1}">Load case ${k + 1}</option>`).join(''); sel.value = S.lc; }
+$('lcsel').addEventListener('change', e => { S.lc = +e.target.value; setTool('load'); draw(); });
+$('lcadd').addEventListener('click', () => { S.nLC = numCases() + 1; S.lc = S.nLC; renderCases(); renderFeats(); setTool('load'); draw(); toast(`Load case ${S.lc}: new loads go here. Each design must survive every case.`); });
 $('voidshape').addEventListener('change', e => S.voidShape = e.target.value);
 
 function renderFeats() {
@@ -431,8 +451,9 @@ function renderFeats() {
   S.features.forEach((f, i) => {
     const row = document.createElement('div'); row.className = 'feat';
     if (f.type === 'load') {
-      nl++; row.innerHTML = `<span class="tag load">Load ${nl}</span><span class="mono">at (${fmt(f.x, 1)}, ${fmt(f.y, 1)}) mm</span>
+      nl++; row.innerHTML = `<span class="tag load">Load ${nl}</span><label>Case <select id="lcf${i}">${Array.from({ length: numCases() }, (_, k) => `<option value="${k + 1}"${caseOf(f) === k + 1 ? ' selected' : ''}>${k + 1}</option>`).join('')}</select></label><span class="mono">at (${fmt(f.x, 1)}, ${fmt(f.y, 1)}) mm</span>
         <label>Fx <input type="number" step="50" id="fx${i}" value="${f.fx}"></label><label>Fy <input type="number" step="50" id="fy${i}" value="${f.fy}"></label><span class="hint">N, +y up</span>`;
+      row.querySelector(`#lcf${i}`).addEventListener('change', e => { snapshot(); f.lc = +e.target.value; markDirty(); renderFeats(); draw(); });
       row.querySelector(`#fx${i}`).addEventListener('change', e => { snapshot(); f.fx = +e.target.value || 0; markDirty(); draw(); });
       row.querySelector(`#fy${i}`).addEventListener('change', e => { snapshot(); f.fy = +e.target.value || 0; markDirty(); draw(); });
     } else if (f.type === 'fix') {
@@ -457,7 +478,7 @@ function symmetryIssue() {
   const mirror = f => f.type === 'load' ? [W - f.x, f.y, -f.fx, f.fy] : f.shape === 'circle' ? [W - f.cx, f.cy, f.r] : (() => { const k = key(f); return [W - k[2], k[1], W - k[0], k[3]]; })();
   for (const f of S.features) {
     const m = mirror(f);
-    const ok = S.features.some(g => g.type === f.type && (g.shape || '') === (f.shape || '') && key(g).every((v, i) => Math.abs(v - m[i]) <= (f.type === 'load' && i > 1 ? 1 : tol)));
+    const ok = S.features.some(g => g.type === f.type && (f.type !== 'load' || caseOf(g) === caseOf(f)) && (g.shape || '') === (f.shape || '') && key(g).every((v, i) => Math.abs(v - m[i]) <= (f.type === 'load' && i > 1 ? 1 : tol)));
     if (!ok) return 'Mirror symmetry is on, but the supports, loads or zones are not mirror-symmetric. The designs will be symmetric anyway; turn symmetry off for an asymmetric load case.';
   }
   return '';
@@ -491,7 +512,7 @@ function updateCard(id) {
   st.innerHTML = `<span>Mass</span><b>${fmt(m.mass, m.mass < 100 ? 1 : 0)} g</b><span>Plate</span><b>${fmt(m.t, 1)} mm</b><span>FoS</span><b>${fmt(m.fos, 2)}</b><span>δ load</span><b>${fmt(m.defl, 3)} mm</b>`;
   const rec = recommended();
   ch.innerHTML = (id === rec ? '<span class="chip rec">Recommended</span>' : '') + (m.pass ? '<span class="chip ok">Meets spec</span>' : '<span class="chip bad">Fails spec</span>')
-    + (R.ev.brokenLoads ? '<span class="chip bad">Load not carried</span>' : '') + (m.thinPct > 5 ? '<span class="chip warn">Thin webs</span>' : '') + (S.autoT && m.governs === 'buckling' ? '<span class="chip warn">Buckling governs</span>' : '');
+    + (R.ev.brokenLoads ? '<span class="chip bad">Load not carried</span>' : '') + (m.thinPct > 5 ? '<span class="chip warn">Thin webs</span>' : '') + (S.autoT && m.governs.startsWith('buckling') ? '<span class="chip warn">Buckling governs</span>' : '');
 }
 function renderSummary() {
   const r = S.run; if (!r) return;
@@ -504,7 +525,7 @@ function renderSummary() {
   const m = metrics(S.results[rec]), v = VARIANTS.find(x => x.id === rec);
   $('verdict').innerHTML = `Recommended: <span style="color:var(--accent)">${rec} · ${v.name}</span>, ${fmt(m.t, 1)} mm ${M.name}, <span class="num">${fmt(m.mass, m.mass < 100 ? 1 : 0)} g</span>`;
   const save = mb ? (1 - m.mass / mb.mass) * 100 : 0;
-  $('verdictSub').textContent = `Factor of safety ${fmt(m.fos, 2)}, buckling load factor ${isFinite(m.blf) ? fmt(m.blf, 1) : 'n/a'}, deflection at the load ${fmt(m.defl, 3)} mm. Thickness set by ${m.governs}. ${save > 0 ? fmt(save, 0) + '% lighter than a solid plate sized to the same requirement (' + fmt(mb.mass, 0) + ' g at ' + fmt(mb.t, 1) + ' mm).' : ''} Solved in ${secs} s.`;
+  $('verdictSub').textContent = `Factor of safety ${fmt(m.fos, 2)}, buckling load factor ${isFinite(m.blf) ? fmt(m.blf, 1) : 'n/a'}, deflection at the load ${fmt(m.defl, 3)} mm. Thickness set by ${m.governs}.${m.multi ? ` Checked against all ${S.lastDisc.caseIds.length} load cases.` : ''} ${save > 0 ? fmt(save, 0) + '% lighter than a solid plate sized to the same requirement (' + fmt(mb.mass, 0) + ' g at ' + fmt(mb.t, 1) + ' mm).' : ''} Solved in ${secs} s.`;
   if (m.webWarn) { const b = document.createElement('button'); b.className = 'btn'; b.style.marginLeft = '8px'; b.textContent = `Make webs at least ${fmt(m.t, 1)} mm (plate thickness) and regenerate`;
     b.addEventListener('click', () => { S.minW = m.t; S.proc = 'custom'; syncInputs(); startRun(); }); $('verdictSub').append(' For cut plate, webs thinner than the plate are hard to cut cleanly.', b); }
 }
@@ -518,11 +539,12 @@ function renderDetail() {
     ['Plate thickness', `${fmt(m.t, 1)} mm` + (S.autoT ? ` (needs ${fmt(m.tReq, 2)})` : '')],
     ['Mass', `${fmt(m.mass, 1)} g`],
     ['Material area', `${fmt(m.area, 0)} mm²`],
-    ['Peak von Mises stress', `${fmt(m.sig, 1)} MPa`],
+    ...(m.multi ? [['Load cases checked', `${d.caseIds.length}, worst case governs each check`]] : []),
+    ['Peak von Mises stress', `${fmt(m.sig, 1)} MPa${m.cn(R.ev.vmCase)}`],
     ['Factor of safety on yield', `${fmt(m.fos, 2)} (target ${fmt(S.fos, 2)})`],
-    ['Buckling load factor', isFinite(m.blf) ? `${fmt(m.blf, 2)} (target ${fmt(S.bfs, 1)})` : 'No buckling (no compression)'],
+    ['Buckling load factor', isFinite(m.blf) ? `${fmt(m.blf, 2)} (target ${fmt(S.bfs, 1)})${m.cn(R.ev.lamCase)}` : 'No buckling (no compression)'],
     ['Thickness set by', S.autoT ? m.governs : 'your fixed value'],
-    ['Deflection at load', `${fmt(m.defl, 4)} mm`],
+    ['Deflection at load', `${fmt(m.defl, 4)} mm${m.cn(R.ev.dCase)}`],
     ['Max deflection anywhere', `${fmt(m.dmax, 4)} mm`],
     ['Stiffness at load', `${fmt(m.stiff / 1000, 2)} kN/mm`],
     ['Through-holes', `${m.holes}`],
@@ -685,11 +707,16 @@ function makeSVG(loops, m) {
 }
 function makeCSV() {
   const M = MATERIALS[S.mat];
-  const head = ['design', 'name', 'meets_spec', 'plate_thickness_mm', 'required_thickness_mm', 'mass_g', 'area_mm2', 'peak_von_mises_MPa', 'factor_of_safety', 'deflection_at_load_mm', 'max_deflection_mm', 'stiffness_N_per_mm', 'buckling_load_factor', 'thickness_set_by', 'holes', 'below_min_width_pct', 'distinct_pct'];
+  const head = ['design', 'name', 'meets_spec', 'plate_thickness_mm', 'required_thickness_mm', 'mass_g', 'area_mm2', 'peak_von_mises_MPa', 'factor_of_safety', 'deflection_at_load_mm', 'max_deflection_mm', 'stiffness_N_per_mm', 'buckling_load_factor', 'thickness_set_by', 'stress_case', 'deflection_case', 'buckling_case', 'holes', 'below_min_width_pct', 'distinct_pct'];
   const rows = [head.join(',')];
   for (const id of ['base', ...VARIANTS.map(v => v.id)]) { const R = S.results[id], m = metrics(R); if (!m) continue;
     const name = id === 'base' ? 'Solid plate' : VARIANTS.find(v => v.id === id).name;
-    rows.push([id, `"${name}"`, m.pass, m.t, m.tReq.toFixed(3), m.mass.toFixed(2), m.area.toFixed(1), m.sig.toFixed(2), m.fos.toFixed(3), m.defl.toFixed(5), m.dmax.toFixed(5), m.stiff.toFixed(1), isFinite(m.blf) ? m.blf.toFixed(3) : 'none', m.governs, m.holes, m.thinPct.toFixed(2), R.distinct !== undefined ? R.distinct.toFixed(1) : ''].join(',')); }
+    rows.push([id, `"${name}"`, m.pass, m.t, m.tReq.toFixed(3), m.mass.toFixed(2), m.area.toFixed(1), m.sig.toFixed(2), m.fos.toFixed(3), m.defl.toFixed(5), m.dmax.toFixed(5), m.stiff.toFixed(1), isFinite(m.blf) ? m.blf.toFixed(3) : 'none', `"${m.governs}"`, S.lastDisc.caseIds[R.ev.vmCase || 0], S.lastDisc.caseIds[R.ev.dCase || 0], isFinite(m.blf) ? S.lastDisc.caseIds[R.ev.lamCase || 0] : '', m.holes, m.thinPct.toFixed(2), R.distinct !== undefined ? R.distinct.toFixed(1) : ''].join(',')); }
+  rows.push('', 'per_load_case', 'design,load_case,peak_von_mises_MPa,deflection_at_load_mm,buckling_load_factor');
+  for (const id of ['base', ...VARIANTS.map(v => v.id)]) { const R = S.results[id], m = metrics(R); if (!m) continue;
+    const E = MATERIALS[S.mat].E;
+    S.lastDisc.caseIds.forEach((c, k) => { const lam = R.ev.lamC && R.ev.lamC[k];
+      rows.push([id, c, (R.ev.vmMaxC[k] / m.t).toFixed(2), (R.ev.dLoadC[k] / (E * m.t)).toFixed(5), isFinite(lam) ? (lam * E * m.t ** 3).toFixed(3) : 'none'].join(',')); }); }
   rows.push('', `# material,"${M.name}",E_MPa,${M.E},yield_MPa,${M.Sy},density_kg_m3,${M.rho}`, `# target_FoS,${S.fos},target_buckling_factor,${S.bfs},deflection_limit_mm,${S.dlim || 'none'},min_member_width_mm,${S.minW}`, `# design_space_mm,${S.lastDisc.W},${S.lastDisc.H}`);
   return rows.join('\n') + '\n';
 }
@@ -701,6 +728,7 @@ function loadProject(o, quiet) {
   if (MATERIALS[o.material]) S.mat = o.material;
   if (PROCESSES[o.process]) S.proc = o.process;
   if (o.minWidth > 0) S.minW = +o.minWidth;
+  S.nLC = Math.max(1, +o.loadCases || 1, ...S.features.filter(f => f.type === 'load').map(caseOf)); S.lc = 1;
   if (o.fos >= 1) S.fos = +o.fos;
   if (o.bucklingFactor >= 1) S.bfs = +o.bucklingFactor;
   S.dlim = o.deflLimit > 0 ? +o.deflLimit : 0;
@@ -710,7 +738,7 @@ function loadProject(o, quiet) {
   S.preset = o.preset && PRESETS[o.preset] ? o.preset : S.preset;
   syncInputs(); if (!quiet) markDirty(); draw();
 }
-function projectJSON() { return JSON.stringify({ tool: 'Morphe Design Studio', version: 1, preset: S.preset, mesh: S.res, autoThickness: S.autoT, thickness: S.tFix, W: S.W, H: S.H, material: S.mat, process: S.proc, minWidth: S.minW, fos: S.fos, bucklingFactor: S.bfs, deflLimit: S.dlim, symmetric: S.sym, features: S.features }, null, 2); }
+function projectJSON() { return JSON.stringify({ tool: 'Morphe Design Studio', version: 2, loadCases: numCases(), preset: S.preset, mesh: S.res, autoThickness: S.autoT, thickness: S.tFix, W: S.W, H: S.H, material: S.mat, process: S.proc, minWidth: S.minW, fos: S.fos, bucklingFactor: S.bfs, deflLimit: S.dlim, symmetric: S.sym, features: S.features }, null, 2); }
 
 // zip (stored, no compression)
 const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
@@ -769,6 +797,7 @@ function syncInputs() {
   $('mat').value = S.mat; $('proc').value = S.proc; $('minw').value = S.minW; $('fos').value = S.fos; $('bfs').value = S.bfs; $('dlim').value = S.dlim;
   $('autot').checked = S.autoT; $('tfix').value = S.tFix; $('tfix').disabled = S.autoT;
   $('thint').textContent = S.autoT ? 'Thickness is picked per design so each one just meets the requirements.' : 'Every design is checked at this thickness.';
+  if ($('lcsel')) renderCases();
   $('setupSum').textContent = `${S.W} × ${S.H} mm · ${MATERIALS[S.mat].name} · FoS ${S.fos} · buckling ≥ ${S.bfs}`;
   renderFeats();
 }

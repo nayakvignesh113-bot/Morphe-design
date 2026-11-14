@@ -19,6 +19,19 @@ const check = (name, got, want, tolPct) => {
   for (const i of [0, 9, 29, ref.length - 1]) check(`top88 MBB compliance, iteration ${i + 1}`, hist[i], ref[i], 0.01);
 }
 
+// 1b. Same beam with two load cases (second load at top-centre), summed compliance, vs the same reference code
+{
+  const ref2 = require('./top88_reference_2cases.json');
+  const nelx = 60, nely = 20, mesh = C.makeMesh(nelx, nely);
+  const F1 = new Float64Array(mesh.ndof); F1[1] = -1;
+  const F2 = new Float64Array(mesh.ndof); F2[2 * (nelx / 2) * (nely + 1) + 1] = -1;
+  const fixed = new Uint8Array(mesh.ndof);
+  for (let iy = 0; iy <= nely; iy++) fixed[2 * iy] = 1; fixed[mesh.ndof - 1] = 1;
+  const hist = [];
+  C.optimize({ nelx, nely, nu: 0.3, Fs: [F1, F2], fixed, passive: new Int8Array(nelx * nely), vf: 0.5, rmin: 1.5, penal: 3, maxIter: ref2.length, projection: false }, (it, c) => hist.push(c));
+  for (const i of [0, 9, ref2.length - 1]) check(`two load cases, summed compliance, iteration ${i + 1}`, hist[i], ref2[i], 0.01);
+}
+
 // 2. Solid cantilever 200x20 mm, t = 1 mm, E = 1 MPa, nu 0.3, 1 N tip shear: Timoshenko beam theory
 {
   const L = 200, H = 20, nelx = 200, nely = 20, mesh = C.makeMesh(nelx, nely);
@@ -52,6 +65,21 @@ const check = (name, got, want, tolPct) => {
   for (let iy = 0; iy <= nely; iy++) F[2 * mesh.node(nelx, iy)] = -(iy === 0 || iy === nely ? 0.5 : 1) / nely;
   const r = C.evaluate({ nelx, nely, nu: 0, F, fixed, passive: new Int8Array(nelx * nely).fill(2) }, new Float64Array(nelx * nely).fill(1), 1);
   check('Euler cantilever column, pi^2 EI / 4L^2', r.lamB, Math.PI ** 2 * (B / 12) / (4 * L * L), 0.5);
+}
+// 5. Load-case envelope: case 2 = 2 x case 1 must govern stress (x2), deflection (x2) and buckling (x0.5)
+{
+  const nelx = 60, nely = 20, mesh = C.makeMesh(nelx, nely);
+  const F1 = new Float64Array(mesh.ndof), fixed = new Uint8Array(mesh.ndof);
+  for (let iy = 0; iy <= nely; iy++) { const n = mesh.node(0, iy); fixed[2 * n] = fixed[2 * n + 1] = 1; }
+  F1[2 * mesh.node(nelx, nely / 2)] = -1; F1[2 * mesh.node(nelx, nely / 2) + 1] = -1;
+  const F2 = F1.map(v => 2 * v);
+  const job = { nelx, nely, nu: 0.3, fixed, passive: new Int8Array(nelx * nely).fill(2) }, full = new Float64Array(nelx * nely).fill(1);
+  const one = C.evaluate({ ...job, F: F1 }, full, 1), two = C.evaluate({ ...job, Fs: [F1, F2] }, full, 1);
+  check('envelope stress = 2 x case 1', two.vmMax, 2 * one.vmMax, 1e-6);
+  check('envelope deflection = 2 x case 1', two.dLoad, 2 * one.dLoad, 1e-6);
+  check('envelope buckling factor = case 1 / 2', two.lamB, one.lamB / 2, 1e-4);
+  const idx = two.vmCase === 1 && two.dCase === 1 && two.lamCase === 1;
+  console.log(`${idx ? 'PASS' : 'FAIL'}  governing case identified for stress, deflection, buckling (${two.vmCase}, ${two.dCase}, ${two.lamCase})`); if (!idx) fail++;
 }
 console.log(fail ? `${fail} check(s) failed` : 'All checks passed');
 process.exit(fail ? 1 : 0);

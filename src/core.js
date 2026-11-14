@@ -99,6 +99,14 @@ function solveBand(L, n, bw, f) {
   return x;
 }
 
+// One factorization, several load cases
+function feSolveMulti(mesh, KE, Evals, Fs, fixedMask) {
+  const A = assembleBand(mesh, KE, Evals);
+  applyFixed(A, mesh, fixedMask);
+  cholBand(A, mesh.ndof, mesh.bw);
+  return Fs.map(F => { const f = Float64Array.from(F); for (let d = 0; d < mesh.ndof; d++) if (fixedMask[d]) f[d] = 0; return solveBand(A, mesh.ndof, mesh.bw, f); });
+}
+const loadCases = (job) => job.Fs && job.Fs.length ? job.Fs : [job.F];
 function feSolve(mesh, KE, Evals, F, fixedMask) {
   const A = assembleBand(mesh, KE, Evals);
   applyFixed(A, mesh, fixedMask);
@@ -284,11 +292,11 @@ function optimize(job, onIter) {
   while (it < maxIter) {
     it++; loopBeta++;
     for (let e = 0; e < nel; e++) Ev[e] = Emin + Math.pow(xP[e], penal) * (1 - Emin);
-    const U = feSolve(mesh, KE, Ev, job.F, job.fixed);
+    const Us = feSolveMulti(mesh, KE, Ev, loadCases(job), job.fixed);
     c = 0;
     for (let e = 0; e < nel; e++) {
       const o = e*8; let ce = 0;
-      for (let a = 0; a < 8; a++) {
+      for (const U of Us) for (let a = 0; a < 8; a++) {
         let s = 0; const ua = mesh.edof[o+a];
         for (let b = 0; b < 8; b++) s += KE[a*8+b] * U[mesh.edof[o+b]];
         ce += U[ua] * s;
@@ -408,37 +416,46 @@ function evaluate(job, field, h) {
   let anyKeep = false; for (let i = 0; i < n; i++) anyKeep = anyKeep || keep[i];
   let removed = 0;
   if (anyKeep) for (let e = 0; e < nel; e++) if (solid[e] && !keep[lab[e]]) { solid[e] = 0; removed++; }
-  // loaded nodes must touch material
-  const loadNode = new Uint8Array(mesh.nn);
-  for (let d = 0; d < mesh.ndof; d++) if (job.F[d] !== 0) loadNode[d >> 1] = 1;
+  // per-case loaded nodes; every one must touch material
+  const Fs = loadCases(job), nCases = Fs.length;
+  const loadNodeC = Fs.map(F => { const ln = new Uint8Array(mesh.nn); for (let d = 0; d < mesh.ndof; d++) if (F[d] !== 0) ln[d >> 1] = 1; return ln; });
   const touched = new Uint8Array(mesh.nn);
   for (let e = 0; e < nel; e++) if (solid[e]) for (let a = 0; a < 4; a++) touched[mesh.edof[e*8+2*a] >> 1] = 1;
-  let brokenLoads = 0; for (let i = 0; i < mesh.nn; i++) if (loadNode[i] && !touched[i]) brokenLoads++;
-  // FE with solid/void (void = 1e-6 of solid)
+  let brokenLoads = 0; for (let i = 0; i < mesh.nn; i++) if (loadNodeC.some(ln => ln[i]) && !touched[i]) brokenLoads++;
+  // FE with solid/void (void = 1e-6 of solid); stress envelope over the load cases
   const Ev = new Float64Array(nel);
   for (let e = 0; e < nel; e++) Ev[e] = solid[e] ? 1 : 1e-6;
-  const U = feSolve(mesh, KE, Ev, job.F, job.fixed);
-  const vm = new Float32Array(nel);
-  let vmMax = 0, vmMaxAll = 0, vmEl = -1, nSolid = 0;
-  const Sig = new Float64Array(3*nel), tmp3 = [0, 0, 0];
-  for (let e = 0; e < nel; e++) {
-    if (!solid[e]) continue;
-    nSolid++;
-    const s = elementVM(mesh, U, nu, 1, h, e, tmp3); vm[e] = s;
-    Sig[3*e] = tmp3[0]; Sig[3*e+1] = tmp3[1]; Sig[3*e+2] = tmp3[2];
-    vmMaxAll = Math.max(vmMaxAll, s);
-    let atLoad = false;
-    for (let a = 0; a < 4; a++) if (loadNode[mesh.edof[e*8+2*a] >> 1]) atLoad = true;
-    if (!atLoad && s > vmMax) { vmMax = s; vmEl = e; }
+  const Us = feSolveMulti(mesh, KE, Ev, Fs, job.fixed);
+  const vm = new Float32Array(nel), tmp3 = [0, 0, 0];
+  const SigC = [], vmMaxC = [], dLoadC = [], dMaxC = [], compC = [];
+  let nSolid = 0, vmMaxAll = 0, vmEl = -1;
+  for (let e = 0; e < nel; e++) if (solid[e]) nSolid++;
+  for (let k = 0; k < nCases; k++) {
+    const U = Us[k], ln = loadNodeC[k], Sig = new Float64Array(3*nel);
+    let peak = 0, peakEl = -1;
+    for (let e = 0; e < nel; e++) {
+      if (!solid[e]) continue;
+      const s = elementVM(mesh, U, nu, 1, h, e, tmp3);
+      Sig[3*e] = tmp3[0]; Sig[3*e+1] = tmp3[1]; Sig[3*e+2] = tmp3[2];
+      if (s > vm[e]) vm[e] = s;
+      vmMaxAll = Math.max(vmMaxAll, s);
+      let atLoad = false;
+      for (let a = 0; a < 4; a++) if (ln[mesh.edof[e*8+2*a] >> 1]) atLoad = true;
+      if (!atLoad && s > peak) { peak = s; peakEl = e; }
+    }
+    let dMx = 0, dLd = 0;
+    for (let i = 0; i < mesh.nn; i++) { const m = Math.hypot(U[2*i], U[2*i+1]); if (touched[i]) dMx = Math.max(dMx, m); if (ln[i]) dLd = Math.max(dLd, m); }
+    let cp = 0; for (let d = 0; d < mesh.ndof; d++) cp += Fs[k][d] * U[d];
+    SigC.push(Sig); vmMaxC.push(peak); dLoadC.push(dLd); dMaxC.push(dMx); compC.push(cp);
+    if (peak >= Math.max(...vmMaxC)) vmEl = peakEl;
   }
+  const argmax = (arr) => arr.reduce((b, v, i) => v > arr[b] ? i : b, 0);
+  const vmCase = argmax(vmMaxC), dCase = argmax(dLoadC);
+  const vmMax = vmMaxC[vmCase], dLoad = dLoadC[dCase], dMax = Math.max(...dMaxC);
+  const comp = compC.reduce((a, b) => a + b, 0);
+  const U = Us[dCase];
   const dmag = new Float32Array(mesh.nn);
-  let dMax = 0, dLoad = 0;
-  for (let i = 0; i < mesh.nn; i++) {
-    const m = Math.hypot(U[2*i], U[2*i+1]); dmag[i] = m;
-    if (touched[i]) dMax = Math.max(dMax, m);
-    if (loadNode[i]) dLoad = Math.max(dLoad, m);
-  }
-  let comp = 0; for (let d = 0; d < mesh.ndof; d++) comp += job.F[d] * U[d];
+  for (let i = 0; i < mesh.nn; i++) dmag[i] = Math.hypot(U[2*i], U[2*i+1]);
   // holes: void components not touching the domain edge
   const voidMask = new Uint8Array(nel); for (let e = 0; e < nel; e++) voidMask[e] = solid[e] ? 0 : 1;
   const vc = components(nelx, nely, voidMask), edgeTouch = new Uint8Array(vc.n);
@@ -453,15 +470,18 @@ function evaluate(job, field, h) {
     for (let e = 0; e < nel; e++) if (solid[e] && !op[e] && passive[e] !== 2) { thin[e] = 1; thinCount++; }
   }
   // buckling: bolted (fully fixed) nodes are clamped out of plane; sliding supports are simply supported
-  let lamB = Infinity, modeB = null;
+  let lamB = Infinity, modeB = null, lamCase = 0; const lamC = [];
   if (job.buckling !== false) {
     const wfix = new Uint8Array(3*mesh.nn);
     for (let n = 0; n < mesh.nn; n++) { const fxx = job.fixed[2*n], fyy = job.fixed[2*n+1];
       if (fxx || fyy) wfix[3*n] = 1; if (fxx && fyy) { wfix[3*n+1] = 1; wfix[3*n+2] = 1; } }
-    const bk = buckle(mesh, nu, h, solid, Sig, wfix); lamB = bk.lam; modeB = bk.mode;
+    for (let k = 0; k < nCases; k++) {
+      const bk = buckle(mesh, nu, h, solid, SigC[k], wfix); lamC.push(bk.lam);
+      if (bk.lam < lamB) { lamB = bk.lam; modeB = bk.mode; lamCase = k; }
+    }
   }
   const U32 = new Float32Array(U);
-  return { lamB, modeB, added, filled, solid, vm, vmMax, vmMaxAll, vmEl, dmag, dMax, dLoad, comp, nSolid, holes, removed, brokenLoads, thin, thinCount, U: U32 };
+  return { nCases, vmCase, dCase, lamCase, vmMaxC, dLoadC, lamC, lamB, modeB, added, filled, solid, vm, vmMax, vmMaxAll, vmEl, dmag, dMax, dLoad, comp, nSolid, holes, removed, brokenLoads, thin, thinCount, U: U32 };
 }
 
-if (typeof module !== 'undefined') module.exports = { buckle, makePlateKE, makeKE, makeMesh, feSolve, makeFilter, optimize, evaluate, components, morphOpen };
+if (typeof module !== 'undefined') module.exports = { feSolveMulti, buckle, makePlateKE, makeKE, makeMesh, feSolve, makeFilter, optimize, evaluate, components, morphOpen };
