@@ -1,11 +1,11 @@
 'use strict';
 // ---------------- data ----------------
 const MATERIALS = {
-  al6061: { name: 'Aluminium 6061-T6', E: 68900, nu: 0.33, Sy: 276, rho: 2700 },
-  al5052: { name: 'Aluminium 5052-H32', E: 70300, nu: 0.33, Sy: 193, rho: 2680 },
-  e250:   { name: 'Structural steel IS 2062 E250', E: 200000, nu: 0.30, Sy: 250, rho: 7850 },
-  ss304:  { name: 'Stainless steel 304', E: 193000, nu: 0.29, Sy: 215, rho: 8000 },
-  ti64:   { name: 'Titanium Ti-6Al-4V', E: 113800, nu: 0.34, Sy: 880, rho: 4430 },
+  al6061: { name: 'Aluminium 6061-T6', E: 68900, nu: 0.33, Sy: 276, rho: 2700, Sut: 310, Sf: 96.5, life: '5×10⁸ cycles' },
+  al5052: { name: 'Aluminium 5052-H32', E: 70300, nu: 0.33, Sy: 193, rho: 2680, Sut: 228, Sf: 117, life: '5×10⁸ cycles' },
+  e250:   { name: 'Structural steel IS 2062 E250', E: 200000, nu: 0.30, Sy: 250, rho: 7850, Sut: 410, Sf: 205, life: 'infinite life' },
+  ss304:  { name: 'Stainless steel 304', E: 193000, nu: 0.29, Sy: 215, rho: 8000, Sut: 505, Sf: 240, life: 'infinite life' },
+  ti64:   { name: 'Titanium Ti-6Al-4V', E: 113800, nu: 0.34, Sy: 880, rho: 4430, Sut: 950, Sf: 510, life: 'infinite life' },
   acry:   { name: 'Acrylic (PMMA) sheet', E: 3200, nu: 0.37, Sy: 60, rho: 1190 },
   pla:    { name: 'PLA, FDM printed', E: 3500, nu: 0.36, Sy: 40, rho: 1240 },
   pa12:   { name: 'Nylon PA12, SLS', E: 1700, nu: 0.40, Sy: 46, rho: 1010 },
@@ -23,6 +23,15 @@ const BOLTS = { M4: { d: 4, hole: 4.5, As: 8.78 }, M5: { d: 5, hole: 5.5, As: 14
   M12: { d: 12, hole: 13.5, As: 84.3 }, M16: { d: 16, hole: 17.5, As: 157 }, M20: { d: 20, hole: 22, As: 245 } };
 const boltSy = (b) => BOLTS[b].d <= 16 ? 640 : 660;
 const ringR = (f) => Math.max(1.5 * BOLTS[f.bolt].hole, BOLTS[f.bolt].hole / 2 + S.minW);  // edge distance 1.5 d from the hole centre
+// Fatigue: Marin-corrected strength Se = ka kc ke Sf. ka = a Sut^b (surface), kc = 0.85 (axial), ke = 0.814 (99% reliability).
+const SURFACE = { laser: [57.7, -0.718, 'as-cut edge'], water: [57.7, -0.718, 'as-cut edge'], mill: [4.51, -0.265, 'machined'], fdm: [272, -0.995, 'as-built'], am: [272, -0.995, 'as-built'], custom: [4.51, -0.265, 'machined'] };
+const CYCLES = { static: null, repeated: [0.5, 0.5, 'repeated, 0 ↔ load (R = 0)'], reversed: [1, 0, 'fully reversed, ± load (R = −1)'] };
+function fatigueData() {
+  const M = MATERIALS[S.mat], cy = CYCLES[S.cyc]; if (!cy) return null;
+  if (!M.Sf) return { unavailable: true };
+  const [a, b, surf] = SURFACE[S.proc], ka = Math.min(1, a * Math.pow(M.Sut, b)), kc = 0.85, ke = 0.814, Se = ka * kc * ke * M.Sf;
+  return { ka, kc, ke, Se, surf, ca: cy[0], cm: cy[1], label: cy[2], g: cy[0] / Se + cy[1] / M.Sut };  // 1/n_f = sigma g (modified Goodman)
+}
 const GAUGES = [0.5, 0.8, 1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10, 12, 14, 16, 18, 20, 22, 25, 28, 30, 32, 36, 40, 45, 50, 60, 70, 80, 100];
 const RES = { draft: 1800, std: 3200, fine: 6400 };
 const VARIANTS = [
@@ -68,7 +77,7 @@ const PRESETS = {
 // ---------------- state ----------------
 const S = {
   preset: 'bolted', W: 160, H: 100, res: 'std', sym: false,
-  holeRole: 'support', holeBolt: 'M8', loadMag: 1000, loadAng: 270, lc: 1, nLC: 1, mat: 'al6061', proc: 'laser', minW: 3, fos: 2, bfs: 3, dlim: 0, autoT: true, tFix: 5,
+  holeRole: 'support', holeBolt: 'M8', loadMag: 1000, loadAng: 270, lc: 1, nLC: 1, mat: 'al6061', proc: 'laser', minW: 3, fos: 2, bfs: 3, cyc: 'static', ffs: 1.5, dlim: 0, autoT: true, tFix: 5,
   features: [], tool: 'load', supType: 'xy', voidShape: 'rect', view: 'shape',
   run: null, results: {}, selected: 'B', dirty: false, lastDisc: null,
 };
@@ -335,20 +344,22 @@ function metrics(R) {
     return { idx: d.holes.indexOf(H) + 1, f: H.f, dh, F, kc, tBr: F * S.fos / (dh * M.Sy), nb, boltOK: nb >= S.fos, need };
   });
   const tBr = Math.max(0, ...holeChecks.map(c => c.tBr)), brHole = holeChecks.find(c => c.tBr === tBr);
-  const tReq = Math.max(tS, tD, tB, tBr);
+  const fat = fatigueData(), tF = fat && !fat.unavailable ? src.vmAway * S.ffs * fat.g : 0;
+  const tReq = Math.max(tS, tD, tB, tBr, tF);
   const multi = d.caseIds.length > 1, cn = (k) => multi ? ` (load case ${d.caseIds[k || 0]})` : '';
-  const governs = (tReq === tBr && tBr > 0 ? `bearing at hole ${brHole.idx}` + cn(brHole.kc) : tReq === tB && tB > 0 ? 'buckling' + cn(src.lamCase) : tReq === tD && tD > 0 ? 'deflection' + cn(src.dCase) : 'stress' + cn(src.awayCase));
+  const governs = (tReq === tF && tF > 0 ? 'fatigue' + cn(src.awayCase) : tReq === tBr && tBr > 0 ? `bearing at hole ${brHole.idx}` + cn(brHole.kc) : tReq === tB && tB > 0 ? 'buckling' + cn(src.lamCase) : tReq === tD && tD > 0 ? 'deflection' + cn(src.dCase) : 'stress' + cn(src.awayCase));
   const t = S.autoT ? gaugeUp(tReq) : S.tFix;
   const sig = src.vmAway / t, fos = M.Sy / sig, defl = src.dLoad / (M.E * t), dmax = Math.max(ev.dMax / (M.E * t), defl);
   const hot = src.vmZone / t, hotWarn = hot > M.Sy / S.fos;
+  const nf = fat && !fat.unavailable ? 1 / (sig * fat.g) : null;
 
   const mass = M.rho * 1e-9 * area * t * 1000;
   const Fd = d.Fs[src.dCase || 0]; let Ftot = 0; for (let i = 0; i < Fd.length; i++) Ftot += Fd[i] * Fd[i]; Ftot = Math.sqrt(Ftot);
   const blf = isFinite(lamHat) ? lamHat * M.E * t * t * t : Infinity;
-  const pass = fos >= S.fos - 1e-9 && (!(S.dlim > 0) || defl <= S.dlim + 1e-12) && blf >= S.bfs * (1 - 1e-9) && !ev.brokenLoads && !src.brokenLoads && !(as && (as.sharp || as.outline)) && holeChecks.every(c => c.boltOK && c.F * S.fos / (c.dh * t) <= M.Sy * (1 + 1e-9));
+  const pass = fos >= S.fos - 1e-9 && (!(S.dlim > 0) || defl <= S.dlim + 1e-12) && blf >= S.bfs * (1 - 1e-9) && (nf === null || nf >= S.ffs * (1 - 1e-9)) && !ev.brokenLoads && !src.brokenLoads && !(as && (as.sharp || as.outline)) && holeChecks.every(c => c.boltOK && c.F * S.fos / (c.dh * t) <= M.Sy * (1 + 1e-9));
   const thinPct = ev.nSolid ? ev.thinCount / ev.nSolid * 100 : 0;
   const webWarn = PROCESSES[S.proc].cut && t > S.minW * 1.5;
-  return { holeChecks, tBr, src, ver, as, converged: !!(as && as.converged), hot, hotWarn, cn, multi, blf, governs, area, tReq, t, sig, fos, defl, dmax, mass, stiff: defl > 0 ? Ftot / defl : 0, pass, thinPct, webWarn, holes: ev.holes, added: ev.added * d.hx * d.hy };
+  return { fat, nf, tF, holeChecks, tBr, src, ver, as, converged: !!(as && as.converged), hot, hotWarn, cn, multi, blf, governs, area, tReq, t, sig, fos, defl, dmax, mass, stiff: defl > 0 ? Ftot / defl : 0, pass, thinPct, webWarn, holes: ev.holes, added: ev.added * d.hx * d.hy };
 }
 function computeDistinct() {
   const ids = VARIANTS.map(v => v.id).filter(id => S.results[id] && S.results[id].ev);
@@ -735,7 +746,7 @@ function updateCard(id) {
   st.innerHTML = `<span>Mass</span><b>${fmt(m.mass, m.mass < 100 ? 1 : 0)} g</b><span>Plate</span><b>${fmt(m.t, 1)} mm</b><span>FoS</span><b>${fmt(m.fos, 2)}</b><span>δ load</span><b>${fmt(m.defl, 3)} mm</b>`;
   const rec = recommended();
   ch.innerHTML = (id === rec ? '<span class="chip rec">Recommended</span>' : '') + (m.pass ? '<span class="chip ok">Meets spec</span>' : '<span class="chip bad">Fails spec</span>')
-    + (R.ev.brokenLoads ? '<span class="chip bad">Load not carried</span>' : '') + (m.thinPct > 5 ? '<span class="chip warn">Thin webs</span>' : '') + (S.autoT && m.governs.startsWith('buckling') ? '<span class="chip warn">Buckling governs</span>' : '')
+    + (R.ev.brokenLoads ? '<span class="chip bad">Load not carried</span>' : '') + (m.thinPct > 5 ? '<span class="chip warn">Thin webs</span>' : '') + (S.autoT && m.governs.startsWith('buckling') ? '<span class="chip warn">Buckling governs</span>' : '') + (S.autoT && m.governs.startsWith('fatigue') ? '<span class="chip warn">Fatigue governs</span>' : '')
     + (m.as && m.as.outline ? '<span class="chip bad">Outline loses material</span>' : m.as && m.as.sharp ? '<span class="chip bad">Sharp junction</span>' : '')
     + (m.ver ? (m.converged ? '<span class="chip ok">Mesh-checked</span>' : m.as.outline || m.as.sharp ? '' : '<span class="chip warn">Mesh-sensitive</span>') : R.ver && R.ver.status === 'running' ? '<span class="chip">Checking mesh…</span>' : '')
     + (m.hotWarn ? '<span class="chip warn">Hot spot at support</span>' : '')
@@ -794,6 +805,7 @@ function renderDetail() {
     ['Hot spot within ' + fmt(EXCL * d.h, 1) + ' mm of a support or load', `<span style="color:${m.hotWarn ? 'var(--warn)' : 'inherit'}">${fmt(m.hot, 1)} MPa</span>`],
     ['Factor of safety on yield', `${fmt(m.fos, 2)} (target ${fmt(S.fos, 2)})`],
     ['Buckling load factor', isFinite(m.blf) ? `${fmt(m.blf, 2)} (target ${fmt(S.bfs, 1)})${m.cn(m.src.lamCase)}` : 'No buckling (no compression)'],
+    ...(m.fat ? [['Fatigue factor (modified Goodman)', m.fat.unavailable ? 'No fatigue data for this material' : `${fmt(m.nf, 2)} (target ${fmt(S.ffs, 1)}), ${MATERIALS[S.mat].life}`]] : []),
     ['Thickness set by', S.autoT ? m.governs : 'your fixed value'],
     [`Deflection at load, at ${fmt(m.t, 1)} mm`, `${fmt(m.defl, 4)} mm${m.cn(m.src.dCase)}`],
     ['Max deflection anywhere', `${fmt(m.dmax, 4)} mm`],
@@ -880,12 +892,17 @@ function renderCalc(R, m) {
     `t${sub('', 'σ')} = σ${sub('', '1')} · FoS / S${sub('', 'y')} = ${n(sh, 1)} × ${n(S.fos)} / ${n(M.Sy, 0)} = <b>${n(tS)}</b> mm<br>`
     + (S.dlim > 0 ? `t${sub('', 'δ')} = δ${sub('', '1')} / (E δ${sub('', 'allow')}) = ${n(dh, 0)} / (${n(M.E, 0)} × ${n(S.dlim, 3)}) = <b>${n(tD)}</b> mm<br>` : `t${sub('', 'δ')}: no deflection limit set<br>`)
     + (isFinite(lh) ? `t${sub('', 'b')} = (λ${sub('', 'req')} / (λ${sub('', '1')} E))<sup>1/3</sup> = (${n(S.bfs, 1)} / (${lh.toExponential(3)} × ${n(M.E, 0)}))<sup>1/3</sup> = <b>${n(tB)}</b> mm<br>` : `t${sub('', 'b')}: no buckling (no compression)<br>`)
+    + (m.fat && !m.fat.unavailable ? `t${sub('', 'f')} = σ${sub('', '1')} · n${sub('', 'f')} · (c${sub('', 'a')}/S${sub('', 'e')} + c${sub('', 'm')}/S${sub('', 'ut')}) = ${n(sh, 1)} × ${n(S.ffs, 1)} × (${m.fat.ca}/${n(m.fat.Se, 1)} + ${m.fat.cm}/${n(M.Sut, 0)}) = <b>${n(m.tF)}</b> mm (fatigue, see below)<br>` : '')
     + (m.tBr > 0 ? `t${sub('', 'br')} = <b>${n(m.tBr)}</b> mm (bearing, see below)<br>` : '')
     + (S.autoT ? `t = gauge↑(max) = <b>${n(t, 1)}</b> mm (set by ${m.governs})` : `t = ${n(t, 1)} mm (your fixed value)`));
   if (m.holeChecks.length) { const c = m.holeChecks.reduce((a, b) => b.tBr > a.tBr ? b : a);
     h += eq('Bolt holes: plate bearing and bolt shear', `σ${sub('', 'br')} = F / (d t), &nbsp; t${sub('', 'br')} = F · FoS / (d S${sub('', 'y')}) = ${n(c.F, 0)} × ${n(S.fos)} / (${n(c.dh, 1)} × ${n(M.Sy, 0)}) = <b>${n(c.tBr)}</b> mm (hole ${c.idx})<br>
       τ${sub('', 'bolt')} = F / A${sub('', 's')}, &nbsp; FoS${sub('', 'bolt')} = 0.577 S${sub('', 'y,bolt')} / τ = 0.577 × ${boltSy(c.f.bolt)} / (${n(c.F, 0)} / ${n(BOLTS[c.f.bolt].As, 1)}) = <b>${n(c.nb, 1)}</b> (${c.f.bolt}, class 8.8, shear through the threads)<br>
       Support holes carry the reaction found by the analysis; a load hole carries its load as cosine pressure on the side the pin pushes against.`); }
+  if (m.fat) h += eq('Fatigue (modified Goodman)', m.fat.unavailable ? 'No reliable fatigue data for this material; fatigue is not checked.' :
+    `Loading: ${m.fat.label}. σ${sub('', 'a')} = ${m.fat.ca} σ, σ${sub('', 'm')} = ${m.fat.cm} σ, with σ the mesh-checked peak von Mises stress (it already includes the stress concentration)<br>
+     S${sub('', 'e')} = k${sub('', 'a')} k${sub('', 'c')} k${sub('', 'e')} S${sub('', 'f')} = ${n(m.fat.ka, 3)} (${m.fat.surf}) × ${m.fat.kc} (axial) × ${m.fat.ke} (99% reliability) × ${n(M.Sf, 1)} = <b>${n(m.fat.Se, 1)}</b> MPa (${M.life})<br>
+     1/n${sub('', 'f')} = σ${sub('', 'a')}/S${sub('', 'e')} + σ${sub('', 'm')}/S${sub('', 'ut')} → n${sub('', 'f')} = 1 / (${n(m.sig, 1)} × (${m.fat.ca}/${n(m.fat.Se, 1)} + ${m.fat.cm}/${n(M.Sut, 0)})) = <b>${n(m.nf)}</b>`);
   h += eq(`11 · Results at t = ${fmt(t, 1)} mm`, `σ = ${n(sh, 1)} / ${n(t, 1)} = ${n(m.sig, 1)} MPa → FoS = ${n(M.Sy, 0)} / ${n(m.sig, 1)} = <b>${n(m.fos)}</b><br>δ = ${n(dh, 0)} / (${n(M.E, 0)} × ${n(t, 1)}) = <b>${n(m.defl, 4)}</b> mm${isFinite(lh) ? `<br>λ = ${lh.toExponential(3)} × ${n(M.E, 0)} × ${n(t, 1)}³ = <b>${n(m.blf)}</b>` : ''}<br>mass = ρ A t = ${n(M.rho, 0)} kg/m³ × ${n(m.area, 0)} mm² × ${n(t, 1)} mm = <b>${n(m.mass, 1)}</b> g`);
   h += `<p class="hint">Why added load may not change the reported deflection: the thickness is re-sized for every setup, so extra load makes the plate thicker, which brings stress and deflection back down. To see the effect of a load at constant thickness, untick "Size plate thickness" and set the thickness.</p>`;
   box.innerHTML = h;
@@ -1076,17 +1093,17 @@ function makeSVG(loops, m) {
 }
 function makeCSV() {
   const M = MATERIALS[S.mat];
-  const head = ['design', 'name', 'meets_spec', 'plate_thickness_mm', 'required_thickness_mm', 'mass_g', 'area_mm2', 'peak_von_mises_MPa', 'factor_of_safety', 'deflection_at_load_mm', 'max_deflection_mm', 'stiffness_N_per_mm', 'buckling_load_factor', 'thickness_set_by', 'stress_case', 'deflection_case', 'buckling_case', 'holes', 'below_min_width_pct', 'distinct_pct', 'mesh_checked', 'stress_extrapolation_pct', 'hotspot_at_supports_MPa'];
+  const head = ['design', 'name', 'meets_spec', 'plate_thickness_mm', 'required_thickness_mm', 'mass_g', 'area_mm2', 'peak_von_mises_MPa', 'factor_of_safety', 'deflection_at_load_mm', 'max_deflection_mm', 'stiffness_N_per_mm', 'buckling_load_factor', 'thickness_set_by', 'stress_case', 'deflection_case', 'buckling_case', 'holes', 'below_min_width_pct', 'distinct_pct', 'mesh_checked', 'stress_extrapolation_pct', 'hotspot_at_supports_MPa', 'fatigue_factor'];
   const rows = [head.join(',')];
   for (const id of ['base', ...VARIANTS.map(v => v.id)]) { const R = S.results[id], m = metrics(R); if (!m) continue;
     const name = id === 'base' ? 'Solid plate' : VARIANTS.find(v => v.id === id).name;
-    rows.push([id, `"${name}"`, m.pass, m.t, m.tReq.toFixed(3), m.mass.toFixed(2), m.area.toFixed(1), m.sig.toFixed(2), m.fos.toFixed(3), m.defl.toFixed(5), m.dmax.toFixed(5), m.stiff.toFixed(1), isFinite(m.blf) ? m.blf.toFixed(3) : 'none', `"${m.governs}"`, S.lastDisc.caseIds[R.ev.vmCase || 0], S.lastDisc.caseIds[R.ev.dCase || 0], isFinite(m.blf) ? S.lastDisc.caseIds[R.ev.lamCase || 0] : '', m.holes, m.thinPct.toFixed(2), R.distinct !== undefined ? R.distinct.toFixed(1) : '', !!m.ver, m.as ? m.as.extrapPct.toFixed(1) : '', m.hot.toFixed(2)].join(',')); }
+    rows.push([id, `"${name}"`, m.pass, m.t, m.tReq.toFixed(3), m.mass.toFixed(2), m.area.toFixed(1), m.sig.toFixed(2), m.fos.toFixed(3), m.defl.toFixed(5), m.dmax.toFixed(5), m.stiff.toFixed(1), isFinite(m.blf) ? m.blf.toFixed(3) : 'none', `"${m.governs}"`, S.lastDisc.caseIds[R.ev.vmCase || 0], S.lastDisc.caseIds[R.ev.dCase || 0], isFinite(m.blf) ? S.lastDisc.caseIds[R.ev.lamCase || 0] : '', m.holes, m.thinPct.toFixed(2), R.distinct !== undefined ? R.distinct.toFixed(1) : '', !!m.ver, m.as ? m.as.extrapPct.toFixed(1) : '', m.hot.toFixed(2), m.nf !== null && m.nf !== undefined ? m.nf.toFixed(3) : ''].join(',')); }
   rows.push('', 'per_load_case', 'design,load_case,peak_von_mises_MPa,deflection_at_load_mm,buckling_load_factor');
   for (const id of ['base', ...VARIANTS.map(v => v.id)]) { const R = S.results[id], m = metrics(R); if (!m) continue;
     const E = MATERIALS[S.mat].E;
     S.lastDisc.caseIds.forEach((c, k) => { const lam = R.ev.lamC && R.ev.lamC[k];
       rows.push([id, c, (R.ev.vmMaxC[k] / m.t).toFixed(2), (R.ev.dLoadC[k] / (E * m.t)).toFixed(5), isFinite(lam) ? (lam * E * m.t ** 3).toFixed(3) : 'none'].join(',')); }); }
-  rows.push('', `# material,"${M.name}",E_MPa,${M.E},yield_MPa,${M.Sy},density_kg_m3,${M.rho}`, `# target_FoS,${S.fos},target_buckling_factor,${S.bfs},deflection_limit_mm,${S.dlim || 'none'},min_member_width_mm,${S.minW}`, `# design_space_mm,${S.lastDisc.W},${S.lastDisc.H}`);
+  rows.push('', `# material,"${M.name}",E_MPa,${M.E},yield_MPa,${M.Sy},density_kg_m3,${M.rho}`, `# loading,${S.cyc},target_fatigue_factor,${S.ffs}`, `# target_FoS,${S.fos},target_buckling_factor,${S.bfs},deflection_limit_mm,${S.dlim || 'none'},min_member_width_mm,${S.minW}`, `# design_space_mm,${S.lastDisc.W},${S.lastDisc.H}`);
   return rows.join('\n') + '\n';
 }
 function loadProject(o, quiet) {
@@ -1100,6 +1117,7 @@ function loadProject(o, quiet) {
   S.nLC = Math.max(1, +o.loadCases || 1, ...S.features.filter(f => f.type === 'load').map(caseOf)); S.lc = 1;
   if (o.fos >= 1) S.fos = +o.fos;
   if (o.bucklingFactor >= 1) S.bfs = +o.bucklingFactor;
+  S.cyc = CYCLES.hasOwnProperty(o.loading) ? o.loading : 'static'; if (o.fatigueFactor >= 1) S.ffs = +o.fatigueFactor;
   S.dlim = o.deflLimit > 0 ? +o.deflLimit : 0;
   if (typeof o.autoThickness === 'boolean') S.autoT = o.autoThickness;
   if (o.thickness > 0) S.tFix = +o.thickness;
@@ -1107,7 +1125,21 @@ function loadProject(o, quiet) {
   S.preset = o.preset && PRESETS[o.preset] ? o.preset : S.preset;
   syncInputs(); if (!quiet) markDirty(); draw();
 }
-function projectJSON() { return JSON.stringify({ tool: 'Morphe Design Studio', version: 2, loadCases: numCases(), preset: S.preset, mesh: S.res, autoThickness: S.autoT, thickness: S.tFix, W: S.W, H: S.H, material: S.mat, process: S.proc, minWidth: S.minW, fos: S.fos, bucklingFactor: S.bfs, deflLimit: S.dlim, symmetric: S.sym, features: S.features }, null, 2); }
+// Neutral hand-off of the finished part for detailed checks elsewhere (MechDe or any other tool)
+function handoffJSON(R, m) {
+  const M = MATERIALS[S.mat], d = S.lastDisc, st = setupText(), r4 = v => +v.toFixed(4);
+  return JSON.stringify({ format: 'morphe-handoff', version: 1, units: { length: 'mm', force: 'N', stress: 'MPa', mass: 'g' }, origin: 'bottom-left of the design space, x right, y up',
+    design: { id: S.selected, designSpace: [d.W, d.H], thickness: m.t, mass: r4(m.mass), area: r4(m.area) },
+    material: { name: M.name, E: M.E, nu: M.nu, yield: M.Sy, ultimate: M.Sut || null, fatigueStrength: M.Sf || null, density_kg_m3: M.rho },
+    geometry: { outline: withoutHoleLoops(contours(R)).map(lp => lp.map(([x, y]) => [r4(x), r4(y)])), holes: holeCircles().map(c => ({ x: c.x, y: c.y, diameter: 2 * c.r })) },
+    supports: S.features.filter(f => f.type === 'fix' || (f.type === 'hole' && f.role === 'support')),
+    loads: S.features.filter(isLoad).map(f => ({ case: caseOf(f), x: f.x, y: f.y, fx: f.fx, fy: f.fy, pinIn: f.type === 'hole' ? f.bolt : null })),
+    requirements: { factorOfSafety: S.fos, bucklingFactor: S.bfs, deflectionLimit: S.dlim || null, loading: S.cyc, fatigueFactor: S.cyc === 'static' ? null : S.ffs },
+    results: { meshChecked: !!m.ver, peakVonMises: r4(m.sig), factorOfSafety: r4(m.fos), deflectionAtLoad: r4(m.defl), bucklingFactor: isFinite(m.blf) ? r4(m.blf) : null, fatigueFactor: m.nf != null ? r4(m.nf) : null,
+      stiffness_N_per_mm: r4(m.stiff), thicknessSetBy: m.governs, bolts: m.holeChecks.map(c => ({ hole: c.idx, bolt: c.f.bolt, force: r4(c.F), bearingStress: r4(c.F / (c.dh * m.t)), boltShearFactor: r4(c.nb) })) },
+    description: st }, null, 1);
+}
+function projectJSON() { return JSON.stringify({ tool: 'Morphe Design Studio', version: 2, loadCases: numCases(), preset: S.preset, mesh: S.res, autoThickness: S.autoT, thickness: S.tFix, W: S.W, H: S.H, material: S.mat, process: S.proc, minWidth: S.minW, fos: S.fos, bucklingFactor: S.bfs, loading: S.cyc, fatigueFactor: S.ffs, deflLimit: S.dlim, symmetric: S.sym, features: S.features }, null, 2); }
 
 // zip (stored, no compression)
 const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
@@ -1152,19 +1184,20 @@ async function saveFile(filename, data) {
 function ready() { const R = S.results[S.selected]; if (!R || !R.ev) { toast('Wait for this design to finish.'); return null; } if (S.dirty) toast('Exporting the design from the previous setup. Regenerate to export the current one.'); return R; }
 const baseName = () => `morphe_${S.preset}_${S.selected === 'base' ? 'solid' : S.selected}`;
 $('exZip').addEventListener('click', () => { const R = ready(); if (!R) return; const lp = contours(R), m = metrics(R);
-  saveFile(baseName() + '.zip', zip([{ name: baseName() + '.dxf', data: makeDXF(lp) }, { name: baseName() + '.svg', data: makeSVG(lp, m) }, { name: baseName() + `_${fmt(m.t, 1)}mm.stl`, data: makeSTL(R, m.t) }, { name: 'morphe_report.csv', data: makeCSV() }, { name: 'validation.txt', data: validationText(R, m) }, { name: 'morphe_project.json', data: projectJSON() }])); });
+  saveFile(baseName() + '.zip', zip([{ name: baseName() + '.dxf', data: makeDXF(lp) }, { name: baseName() + '.svg', data: makeSVG(lp, m) }, { name: baseName() + `_${fmt(m.t, 1)}mm.stl`, data: makeSTL(R, m.t) }, { name: 'morphe_report.csv', data: makeCSV() }, { name: 'validation.txt', data: validationText(R, m) }, { name: baseName() + '_handoff.json', data: handoffJSON(R, m) }, { name: 'morphe_project.json', data: projectJSON() }])); });
 $('exDxf').addEventListener('click', () => { const R = ready(); if (!R) return; saveFile(baseName() + '.dxf', makeDXF(contours(R))); });
 $('exStl').addEventListener('click', () => { const R = ready(); if (!R) return; const m = metrics(R); saveFile(baseName() + `_${fmt(m.t, 1)}mm.stl`, makeSTL(R, m.t)); });
 $('exSvg').addEventListener('click', () => { const R = ready(); if (!R) return; saveFile(baseName() + '.svg', makeSVG(contours(R), metrics(R))); });
 $('exCsv').addEventListener('click', () => { if (!S.results.base || !S.results.base.ev) { toast('Wait for the designs to finish.'); return; } saveFile('morphe_report.csv', makeCSV()); });
 $('exPng').addEventListener('click', () => stage.toBlob(b => saveFile(baseName() + '_' + S.view + '.png', b)));
+$('exHand').addEventListener('click', () => { const R = ready(); if (!R) return; saveFile(baseName() + '_handoff.json', handoffJSON(R, metrics(R))); });
 $('exCopy').addEventListener('click', async () => { const R = ready(); if (!R) return; try { await navigator.clipboard.writeText(makeDXF(contours(R))); toast('DXF copied. Paste into a text file and save it as .dxf'); } catch (e) { toast('Clipboard blocked by the browser.'); } });
 
 // ---------------- inputs ----------------
 function syncInputs() {
   $('preset').value = S.preset; $('W').value = S.W; $('H').value = S.H; $('res').value = S.res; $('sym').checked = S.sym;
   $('lmag').value = S.loadMag; $('lang').value = S.loadAng;
-  $('mat').value = S.mat; $('proc').value = S.proc; $('minw').value = S.minW; $('fos').value = S.fos; $('bfs').value = S.bfs; $('dlim').value = S.dlim;
+  $('mat').value = S.mat; $('proc').value = S.proc; $('minw').value = S.minW; $('fos').value = S.fos; $('bfs').value = S.bfs; $('cyc').value = S.cyc; $('ffs').value = S.ffs; $('ffs').disabled = S.cyc === 'static'; $('dlim').value = S.dlim;
   $('autot').checked = S.autoT; $('tfix').value = S.tFix; $('tfix').disabled = S.autoT;
   $('thint').textContent = S.autoT ? 'Thickness is picked per design so each one just meets the requirements.' : 'Every design is checked at this thickness.';
   if ($('lcsel')) renderCases();
@@ -1181,8 +1214,8 @@ function initInputs() {
   $('minw').addEventListener('change', e => { S.minW = Math.max(0.5, +e.target.value || 1); S.proc = 'custom'; syncInputs(); markDirty(); });
   $('proc').addEventListener('change', e => { S.proc = e.target.value; const p = PROCESSES[S.proc]; if (p.minW) S.minW = p.minW; syncInputs(); markDirty(); });
   const live = (id, key, f) => $(id).addEventListener('change', e => { S[key] = f(e.target); syncInputs(); renderAll(); });
-  ['mat', 'fos', 'bfs', 'dlim', 'autot', 'tfix', 'sym', 'proc', 'minw', 'res'].forEach(id => $(id).addEventListener('change', persist));
-  live('mat', 'mat', t => t.value); live('fos', 'fos', t => Math.max(1, +t.value || 1)); live('bfs', 'bfs', t => Math.max(1, +t.value || 1)); live('dlim', 'dlim', t => Math.max(0, +t.value || 0));
+  ['mat', 'fos', 'bfs', 'cyc', 'ffs', 'dlim', 'autot', 'tfix', 'sym', 'proc', 'minw', 'res'].forEach(id => $(id).addEventListener('change', persist));
+  live('mat', 'mat', t => t.value); live('fos', 'fos', t => Math.max(1, +t.value || 1)); live('bfs', 'bfs', t => Math.max(1, +t.value || 1)); live('cyc', 'cyc', t => t.value); live('ffs', 'ffs', t => Math.max(1, +t.value || 1)); live('dlim', 'dlim', t => Math.max(0, +t.value || 0));
   live('autot', 'autoT', t => t.checked); live('tfix', 'tFix', t => Math.max(0.5, +t.value || 1));
   $('go').addEventListener('click', startRun);
   $('undo').addEventListener('click', undo);

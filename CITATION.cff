@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Morphe Design Studio: browser-based generative design of plate parts with sizing, buckling, fatigue and mesh verification"
+type: software
+authors:
+  - family-names: "Nayak Ullal"
+    given-names: "Vignesh"
+    affiliation: "Mangalore Institute of Technology & Engineering (MITE), Moodbidri, India"
+version: "1.0.0"
+date-released: "2026-11-14"
+repository-code: "https://github.com/nayakvignesh113-bot/morphe-design"
+url: "https://nayakvignesh113-bot.github.io/morphe-design/"

@@ -36,6 +36,7 @@ Note: thickness is re-sized for every setup, so adding load makes the plate thic
 | Buckling | Linear eigenvalue of out-of-plane plate buckling: ACM 12-dof plate elements, geometric stiffness from the in-plane stresses, Lanczos (full re-orthogonalization, residual test) for the smallest positive load factor, which stays correct when the reversed-load mode dominates. Bolted supports clamped, sliding supports simply supported |
 | Mesh check | After each run, every design's cut outline (the smoothed layout that becomes the DXF) is resampled onto the same, 2× and 3× finer meshes and re-analysed. Peak stress, which element-centre stress under-reads at rounded junctions and bending surfaces, is extrapolated from the two finest meshes (first-order Richardson). Sizing uses that value and the fine-mesh deflection and buckling. Designs whose peak still rises >10% on the last refinement (a sharp corner) or whose outline loses material when smoothed are rejected. Stress within 3 optimizer elements of supports and point loads is reported separately as a hot spot |
 | Bolt holes | Support bolts: hole-edge nodes held. Load pins: nodal forces ∝ max(0, n̂·F̂) over the hole edge. Reactions R = K u − F per hole and case give the bearing force. The material ring is checked by bearing, not by the FE peak (a held, stair-stepped hole edge is not a reliable FE stress) |
+| Fatigue | Optional (repeated R = 0 or fully reversed R = −1 loading). Modified Goodman on the mesh-checked peak von Mises stress: 1/n = σa/Se + σm/Sut, with Se = ka·kc·ke·Sf (Marin surface factor from the process, axial 0.85, 99 % reliability 0.814). Steel/Ti: endurance limit; aluminium: strength at 5×10⁸ cycles. Scales as 1/t, so it enters thickness sizing exactly |
 | Load cases | Every design is analysed for every case: stress, deflection and buckling are each taken from the worst case, and the report names which case governs |
 | Sizing | Solved with E = 1, t = 1. Stress ∝ 1/t, deflection ∝ 1/(E·t), buckling load ∝ E·t³, so each required thickness is exact; the largest one wins, rounded up to a standard gauge |
 | Stress | Element-centroid von Mises. Elements touching a point load are excluded from the peak (a point load has no finite stress) |
@@ -64,7 +65,11 @@ On the cantilever template, the optimizer mesh under-reads the peak stress at me
 
 ## Limits
 
-Linear-elastic, static, in-plane loads, uniform thickness. Buckling is a linear (bifurcation) check, so keep the buckling load factor at 3 or more to cover imperfections. It does **not** check out-of-plane applied loads, fatigue or bolt-hole bearing. Before you release a part, run the exported geometry through a full FEA.
+Linear-elastic, static, in-plane loads, uniform thickness. Buckling is a linear (bifurcation) check, so keep the buckling load factor at 3 or more to cover imperfections. It does **not** check out-of-plane applied loads, bolt preload/friction, fretting or welds. Fatigue data for plastics is not included. Before you release a part, run the exported geometry through a full FEA.
+
+## Hand-off file
+
+`*_handoff.json` (button, and in the CAD pack) carries the finished part for detailed checks in MechDe or any other tool: `geometry.outline` (closed polylines, mm), `geometry.holes`, `design.thickness`, `material`, `supports`, `loads` (with load case), `requirements` and `results`. Units: mm, N, MPa, g; origin at the bottom-left of the design space.
 
 ## Develop
 
@@ -81,3 +86,7 @@ Edit the files in `src/`, run `python3 build.py`, and commit the regenerated `in
 ## Reference
 
 Andreassen E., Clausen A., Schevenels M., Lazarov B.S., Sigmund O. (2011). Efficient topology optimization in MATLAB using 88 lines of code. *Structural and Multidisciplinary Optimization* 43, 1–16.
+
+## Licence and citation
+
+Proprietary, all rights reserved (see `LICENSE`). Use, copying, modification or distribution needs the author's written permission. To cite, see `CITATION.cff`.

@@ -215,6 +215,8 @@ ol.steps li { margin-bottom: 10px; }
       <h2>Requirements</h2>
       <div class="field"><label for="fos">Factor of safety on yield</label><input id="fos" type="number" min="1" step="0.1"></div>
       <div class="field"><label for="bfs">Buckling load factor at least</label><input id="bfs" type="number" min="1" step="0.5"></div>
+      <div class="wide"><label for="cyc">Loading</label><select id="cyc"><option value="static">Static (applied once or rarely)</option><option value="repeated">Repeated: 0 ↔ load, many cycles</option><option value="reversed">Fully reversed: ± load, many cycles</option></select></div>
+      <div class="field"><label for="ffs">Fatigue factor at least</label><input id="ffs" type="number" min="1" step="0.1"></div>
       <div class="field"><label for="dlim">Max deflection (mm, 0 = no limit)</label><input id="dlim" type="number" min="0" step="0.05"></div>
       <label class="check"><input id="autot" type="checkbox"> Size plate thickness to a standard gauge</label>
       <div class="field"><label for="tfix">Plate thickness (mm)</label><input id="tfix" type="number" min="0.5" step="0.5"></div>
@@ -296,6 +298,7 @@ ol.steps li { margin-bottom: 10px; }
           <button class="btn" id="exSvg">SVG</button>
           <button class="btn" id="exCsv">CSV of all designs</button>
           <button class="btn" id="exPng">PNG</button>
+          <button class="btn" id="exHand">Hand-off file (.json)</button>
           <button class="btn" id="exCopy">Copy DXF text</button>
         </div>
       </div>
@@ -307,7 +310,7 @@ ol.steps li { margin-bottom: 10px; }
 
     <section class="calcwrap panel"><div id="calc"></div><div id="validate"></div></section>
 
-    <section class="notes panel">
+    <section class="notes panel" id="about">
       <strong>What the numbers mean.</strong>
       <ul>
         <li>2D plane-stress, linear-elastic, static analysis of a plate of uniform thickness. Stress is element-centroid von Mises; elements touching a point load are excluded from the peak because a point load has no finite stress. Your fastener detail sets that local stress.</li>
@@ -316,8 +319,11 @@ ol.steps li { margin-bottom: 10px; }
         <li>Bolt holes: support bolts hold the hole edge (bonded, slightly stiffer than a real clearance fit); a load pin applies cosine pressure on the loaded half of the hole. Plate bearing σ = F/(d·t) is checked against yield and enters thickness sizing; bolt shear uses class 8.8 through the threads (0.577 S<sub>y</sub> on the stress area). Inside the material ring of a bolted or pinned hole, the bearing check governs and that ring is left out of the FE peak; free holes count in full.</li>
         <li>Thickness is solved exactly: stress scales with 1/t, deflection with 1/(E·t) and the buckling load with E·t³. The largest requirement wins, then it is rounded up to the next standard plate gauge.</li>
         <li>Buckling is a linear eigenvalue check of out-of-plane plate buckling. Bolted supports are clamped, sliding supports are simply supported, and load points are free out of plane. A factor of 3 or more allows for imperfections; real parts with large initial bow need more.</li>
-        <li>Not checked: out-of-plane applied loads, fatigue, contact and bearing at bolt holes. Before release, rerun the exported geometry in your FEA package.</li>
+        <li>Fatigue (when loading is repeated or reversed): modified Goodman on the mesh-checked peak von Mises stress, against a Marin-corrected strength (surface from the process, axial loading 0.85, 99% reliability 0.814). Steel and titanium use the endurance limit; aluminium has none, so its strength at 5×10⁸ cycles is used. Each load case is treated as cycling on its own. Plastics have no reliable data and are not checked. Fretting at bolted joints and welds are outside this check.</li>
+        <li>Not checked: out-of-plane applied loads, bolt preload and friction, fretting, welds. Before release, rerun the exported geometry in your FEA package.</li>
         <li>Your setup is kept in this browser between visits. Use Save project to keep or share it as a file.</li>
+        <li>The hand-off file (.json) carries the finished part: outline, holes, thickness, material, supports, loads, requirements and predicted results, in mm, N and MPa, for detailed checks in MechDe or any other tool.</li>
+        <li>© 2026 Vignesh Nayak Ullal. All rights reserved. Use, copying or modification needs the author's written permission.</li>
         <li>Solver verified against the published 88-line topology code (identical compliance history), Timoshenko beam theory (tip deflection within 0.1%), simply supported plate buckling k = 4 (within 0.3%) and the Euler cantilever column (within 0.4%).</li>
       </ul>
     </section>
