@@ -9,13 +9,20 @@ There is no install and no server. Everything runs client-side in one `index.htm
 1. Pick a template (cantilever, simply supported beam, L-bracket, wall shelf bracket, bracket with three load cases) or start from a blank plate.
 2. On the drawing board:
    - **Support**: drag along an edge, or tap for a bolt point. Choose fixed, slides horizontally or slides vertically.
-   - **Load**: tap for a 1 kN downward load, or drag to set its direction. Edit Fx/Fy in N.
+   - **Load**: set its size (N) and direction (0° right, 90° up, 270° down) in the toolbar, then tap; or drag from the point to aim it. Edit Fx/Fy in the list afterwards.
    - **Load cases**: press **+ Load case** for a separate situation the part must survive (e.g. working load, a sideways knock, reversed load). New loads go into the active case; move a load between cases from its row. Loads in the same case act together.
-   - **Keep-out / Keep-solid**: mark clearances, flanges and mounting faces.
+   - **Keep-out**: a region that must stay empty (clearance for a bolt head, shaft or neighbouring part). Give rectangles a corner radius.
+   - **Keep-solid**: a region that must stay material (mounting flange, seating face, area around a hole to be drilled).
 3. Set the material, the manufacturing process (this sets the minimum member width), the target factor of safety, the buckling load factor and the deflection limit.
 4. Press **Generate designs**. The designs form live. The recommended one is marked, and the mass-vs-deflection chart shows the trade-off.
 5. Inspect the Stress, Deflection, Buckling and Thin-webs views, then download the CAD pack (DXF + STL + SVG + CSV report + project JSON), or DXF/STL on their own.
 6. Save project / Open project keeps a setup as a file. The current setup is also kept in your browser between visits, and Undo (Ctrl+Z) steps back through edits.
+
+## Equations and validation in the app
+
+Below each design, **How the numbers are calculated** lists every equation (plane stress, finite elements, SIMP, filter and projection, optimality criteria, von Mises, buckling eigenproblem, thickness scaling, Richardson extrapolation) with that design's own numbers substituted, down to the thickness, factor of safety, deflection, buckling factor and mass. **How to validate this design** gives the setup for an independent FEA run (supports, loads, material, thickness) with the expected values and tolerances, a strain-gauge location for a physical test, and, for the solid cantilever reference, a beam-theory hand check. The CAD pack includes the same as `validation.txt`.
+
+Note: thickness is re-sized for every setup, so adding load makes the plate thicker and the reported deflection may barely move. Untick thickness sizing to compare loads at one thickness.
 
 ## Method
 

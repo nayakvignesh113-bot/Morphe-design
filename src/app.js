@@ -59,7 +59,7 @@ const PRESETS = {
 // ---------------- state ----------------
 const S = {
   preset: 'cantilever', W: 200, H: 100, res: 'std', sym: false,
-  lc: 1, nLC: 1, mat: 'al6061', proc: 'laser', minW: 3, fos: 2, bfs: 3, dlim: 0, autoT: true, tFix: 5,
+  loadMag: 1000, loadAng: 270, lc: 1, nLC: 1, mat: 'al6061', proc: 'laser', minW: 3, fos: 2, bfs: 3, dlim: 0, autoT: true, tFix: 5,
   features: [], tool: 'load', supType: 'xy', voidShape: 'rect', view: 'shape',
   run: null, results: {}, selected: 'B', dirty: false, lastDisc: null,
 };
@@ -506,8 +506,9 @@ stage.addEventListener('pointerup', (ev) => {
   snapshot();
   if (S.tool === 'erase') { if (!eraseAt(d.x0, d.y0)) undoStack.pop(); }
   else if (S.tool === 'load') {
-    let fx = 0, fy = -1000;
-    if (d.moved) { const ang = Math.atan2(d.y1 - d.y0, d.x1 - d.x0), sn = Math.round(ang / (Math.PI / 12)) * (Math.PI / 12); fx = Math.round(1000 * Math.cos(sn)); fy = Math.round(1000 * Math.sin(sn)); }
+    let ang = S.loadAng * Math.PI / 180;
+    if (d.moved) ang = Math.round(Math.atan2(d.y1 - d.y0, d.x1 - d.x0) / (Math.PI / 12)) * (Math.PI / 12);
+    const fx = Math.round(S.loadMag * Math.cos(ang)), fy = Math.round(S.loadMag * Math.sin(ang));
     S.features.push({ type: 'load', lc: S.lc, x: snap(d.x0), y: snap(d.y0), fx, fy });
   } else if (S.tool === 'support') {
     S.features.push({ type: 'fix', dof: S.supType, x0: snap(d.x0), y0: snap(d.y0), x1: snap(d.x1), y1: snap(d.y1) });
@@ -538,13 +539,15 @@ function eraseAt(x, y) {
   return false;
 }
 function toolTip() {
-  return { support: 'Drag along an edge to hold it. Tap for a single bolt point.', load: 'Tap to place a 1 kN downward load, or drag to set its direction. Edit the value below.',
+  return { support: 'Drag along an edge to hold it. Tap for a single bolt point.', load: `Tap to place a ${fmt(S.loadMag, 0)} N load at ${fmt(S.loadAng, 0)}° (set size and direction above), or drag from the point to aim it. Fine-tune Fx and Fy in the list below.`,
     void: 'Drag to mark a zone that must stay empty (clearance, other parts).', solid: 'Drag to mark material that must stay (flanges, mounting faces).', erase: 'Tap a support, load or zone to remove it.' }[S.tool];
 }
-function setTool(t) { S.tool = t; document.querySelectorAll('#tools button').forEach(b => b.setAttribute('aria-pressed', b.dataset.tool === t)); $('suptype').style.display = t === 'support' ? '' : 'none'; $('voidshape').style.display = t === 'void' ? '' : 'none'; $('tip').textContent = toolTip(); }
+function setTool(t) { S.tool = t; document.querySelectorAll('#tools button').forEach(b => b.setAttribute('aria-pressed', b.dataset.tool === t)); $('suptype').style.display = t === 'support' ? '' : 'none'; $('voidshape').style.display = t === 'void' ? '' : 'none'; $('loadctl').style.display = t === 'load' ? '' : 'none'; $('tip').textContent = toolTip(); }
 document.querySelectorAll('#tools button').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
 document.querySelectorAll('#views button').forEach(b => b.addEventListener('click', () => { S.view = b.dataset.view; document.querySelectorAll('#views button').forEach(c => c.setAttribute('aria-pressed', c === b)); draw(); }));
 $('suptype').addEventListener('change', e => S.supType = e.target.value);
+$('lmag').addEventListener('change', e => { S.loadMag = Math.max(1, Math.abs(+e.target.value) || 1000); e.target.value = S.loadMag; $('tip').textContent = toolTip(); });
+$('lang').addEventListener('change', e => { S.loadAng = ((+e.target.value || 0) % 360 + 360) % 360; e.target.value = S.loadAng; $('tip').textContent = toolTip(); });
 function renderCases() { const sel = $('lcsel'), n = numCases(); if (S.lc > n) S.lc = n;
   sel.innerHTML = Array.from({ length: n }, (_, k) => `<option value="${k + 1}">Load case ${k + 1}</option>`).join(''); sel.value = S.lc; }
 $('lcsel').addEventListener('change', e => { S.lc = +e.target.value; setTool('load'); draw(); });
@@ -558,10 +561,10 @@ function renderFeats() {
     const row = document.createElement('div'); row.className = 'feat';
     if (f.type === 'load') {
       nl++; row.innerHTML = `<span class="tag load">Load ${nl}</span><label>Case <select id="lcf${i}">${Array.from({ length: numCases() }, (_, k) => `<option value="${k + 1}"${caseOf(f) === k + 1 ? ' selected' : ''}>${k + 1}</option>`).join('')}</select></label><span class="mono">at (${fmt(f.x, 1)}, ${fmt(f.y, 1)}) mm</span>
-        <label>Fx <input type="number" step="50" id="fx${i}" value="${f.fx}"></label><label>Fy <input type="number" step="50" id="fy${i}" value="${f.fy}"></label><span class="hint">N, +y up</span>`;
+        <label>Fx <input type="number" step="50" id="fx${i}" value="${f.fx}"></label><label>Fy <input type="number" step="50" id="fy${i}" value="${f.fy}"></label><span class="hint">N, +x right, +y up · ${fmt(Math.hypot(f.fx, f.fy), 0)} N at ${fmt((Math.atan2(f.fy, f.fx) * 180 / Math.PI + 360) % 360, 0)}°</span>`;
       row.querySelector(`#lcf${i}`).addEventListener('change', e => { snapshot(); f.lc = +e.target.value; markDirty(); renderFeats(); draw(); });
-      row.querySelector(`#fx${i}`).addEventListener('change', e => { snapshot(); f.fx = +e.target.value || 0; markDirty(); draw(); });
-      row.querySelector(`#fy${i}`).addEventListener('change', e => { snapshot(); f.fy = +e.target.value || 0; markDirty(); draw(); });
+      row.querySelector(`#fx${i}`).addEventListener('change', e => { snapshot(); f.fx = +e.target.value || 0; markDirty(); renderFeats(); draw(); });
+      row.querySelector(`#fy${i}`).addEventListener('change', e => { snapshot(); f.fy = +e.target.value || 0; markDirty(); renderFeats(); draw(); });
     } else if (f.type === 'fix') {
       ns++; row.innerHTML = `<span class="tag sup">Support ${ns}</span><select id="st${i}" aria-label="Support type"><option value="xy">Fixed (bolted)</option><option value="y">Slides horizontally</option><option value="x">Slides vertically</option></select>
         <span class="mono">(${fmt(Math.min(f.x0, f.x1), 0)}, ${fmt(Math.min(f.y0, f.y1), 0)}) to (${fmt(Math.max(f.x0, f.x1), 0)}, ${fmt(Math.max(f.y0, f.y1), 0)}) mm</span>`;
@@ -679,7 +682,7 @@ function renderDetail() {
     ['Factor of safety on yield', `${fmt(m.fos, 2)} (target ${fmt(S.fos, 2)})`],
     ['Buckling load factor', isFinite(m.blf) ? `${fmt(m.blf, 2)} (target ${fmt(S.bfs, 1)})${m.cn(m.src.lamCase)}` : 'No buckling (no compression)'],
     ['Thickness set by', S.autoT ? m.governs : 'your fixed value'],
-    ['Deflection at load', `${fmt(m.defl, 4)} mm${m.cn(m.src.dCase)}`],
+    [`Deflection at load, at ${fmt(m.t, 1)} mm`, `${fmt(m.defl, 4)} mm${m.cn(m.src.dCase)}`],
     ['Max deflection anywhere', `${fmt(m.dmax, 4)} mm`],
     ['Stiffness at load', `${fmt(m.stiff / 1000, 2)} kN/mm`],
     ['Through-holes', `${m.holes}`],
@@ -693,7 +696,7 @@ function renderDetail() {
     (m.webWarn ? `<tr><td colspan="2" style="text-align:left;color:var(--warn);font-family:var(--font-body)">For cut plate, keep webs at least as wide as the plate is thick (${fmt(m.t, 1)} mm). Raise Min member width to ${fmt(m.t, 1)} and regenerate.</td></tr>` : '') +
     (R.ev.brokenLoads ? `<tr><td colspan="2" style="text-align:left;color:var(--bad);font-family:var(--font-body)">A load is not connected to material. Try a more robust variant or add a keep-solid zone at the load.</td></tr>` : '') +
     (m.hotWarn ? `<tr><td colspan="2" style="text-align:left;color:var(--warn);font-family:var(--font-body)">Stress right at a support or load point exceeds the allowable ${fmt(MATERIALS[S.mat].Sy / S.fos, 0)} MPa. That value depends on how the part is held (bolt, clamp, washer), not on this shape: detail the joint, or add a keep-solid pad there.</td></tr>` : '');
-  renderVerify(R, m);
+  renderVerify(R, m); renderCalc(R, m);
 }
 function renderVerify(R, m) {
   const box = $('verifyBox'); if (!box) return;
@@ -711,6 +714,86 @@ function renderVerify(R, m) {
          : a.sharp ? '<b>A junction behaves like a sharp corner and its stress is not settling.</b> Raise the minimum member width or pick a design with bolder webs.' : ''}
        Stress within ${fmt(EXCL * S.lastDisc.h, 1)} mm of supports and loads is shown as the hot spot. · = not computed on this mesh.</p>`;
   box.innerHTML = `<h3 style="margin-top:14px">Mesh check at ${fmt(t, 1)} mm</h3><div style="overflow-x:auto"><table class="metrics verify"><thead><tr><td>Mesh</td><td>Elements</td><td>Stress (MPa)</td><td>Deflection (mm)</td><td>Buckling factor</td></tr></thead><tbody>${rows}</tbody></table></div>${status}`;
+}
+const sub = (b, s) => `${b}<sub>${s}</sub>`;
+function setupText() {
+  const sup = { xy: 'fixed (bolted): u = v = 0', y: 'slides horizontally: v = 0', x: 'slides vertically: u = 0' };
+  const fixes = S.features.filter(f => f.type === 'fix').map(f => `${sup[f.dof]} on (${fmt(Math.min(f.x0, f.x1), 1)}, ${fmt(Math.min(f.y0, f.y1), 1)}) to (${fmt(Math.max(f.x0, f.x1), 1)}, ${fmt(Math.max(f.y0, f.y1), 1)}) mm`);
+  const cases = [...new Set(S.features.filter(f => f.type === 'load').map(caseOf))].sort((a, b) => a - b);
+  const loads = cases.map(c => `Load case ${c}: ` + S.features.filter(f => f.type === 'load' && caseOf(f) === c).map(f => `Fx ${fmt(f.fx, 0)} N, Fy ${fmt(f.fy, 0)} N at (${fmt(f.x, 1)}, ${fmt(f.y, 1)}) mm`).join('; '));
+  const zones = S.features.filter(f => f.type === 'void' || f.type === 'solid').map(f => `${f.type === 'void' ? 'Keep-out' : 'Keep-solid'} ${f.shape === 'circle' ? `circle Ø${fmt(2 * f.r, 1)} at (${fmt(f.cx, 1)}, ${fmt(f.cy, 1)})` : `rectangle (${fmt(Math.min(f.x0, f.x1), 1)}, ${fmt(Math.min(f.y0, f.y1), 1)}) to (${fmt(Math.max(f.x0, f.x1), 1)}, ${fmt(Math.max(f.y0, f.y1), 1)})${f.rc ? `, corner R ${fmt(f.rc, 1)}` : ''}`} mm`);
+  return { fixes, loads, zones };
+}
+function peakXY(R) { const d = S.lastDisc, L = R.ver && R.ver.levels, xy = (L && L[L.length - 1].xy) || R.ev.awayXY; return xy ? [xy[0], d.H - xy[1]] : null; }
+function cantileverCheck(R, m) { // beam theory for the solid reference when the setup is a cantilever (whole left edge bolted, loads on the right edge, one case)
+  const d = S.lastDisc, fx = S.features.filter(f => f.type === 'fix'), ld = S.features.filter(f => f.type === 'load');
+  if (S.selected !== 'base' || fx.length !== 1 || fx[0].dof !== 'xy' || Math.max(fx[0].x0, fx[0].x1) > 0 || Math.min(fx[0].y0, fx[0].y1) > 0 || Math.max(fx[0].y0, fx[0].y1) < d.H
+      || !ld.length || ld.some(f => Math.abs(f.x - d.W) > 1e-6 || Math.abs(f.fx) > 1e-9 || caseOf(f) !== caseOf(ld[0])) || S.features.some(f => f.type === 'void' || f.type === 'solid')) return null;
+  const M = MATERIALS[S.mat], t = m.t, P = Math.abs(ld.reduce((a, f) => a + f.fy, 0)), L = d.W, H = d.H, I = t * H ** 3 / 12, G = M.E / (2 * (1 + M.nu));
+  const x = EXCL * d.h, sig = P * (L - x) * (H / 2) / I, defl = P * L ** 3 / (3 * M.E * I) + P * L / (5 / 6 * G * H * t);
+  return { P, L, H, t, x, sig, defl, I };
+}
+function renderCalc(R, m) {
+  const box = $('calc'); if (!box) return;
+  if (!m) { box.innerHTML = ''; return; }
+  const M = MATERIALS[S.mat], d = S.lastDisc, t = m.t, src = m.src;
+  const sh = src.vmAway, dh = src.dLoad, lh = src.lamB;
+  const tS = sh * S.fos / M.Sy, tD = S.dlim > 0 ? dh / (M.E * S.dlim) : 0, tB = isFinite(lh) ? Math.cbrt(S.bfs / (lh * M.E)) : 0;
+  const v = VARIANTS.find(x => x.id === S.selected), rB = Math.max(2.5, 1.8 * d.rmin0), rm = v ? (v.bold ? rB : d.rmin0) : null;
+  const lv = R.ver && R.ver.levels.filter(l => l.r !== 'opt'), a = lv && lv[lv.length - 2], b = lv && lv[lv.length - 1];
+  const eq = (title, body) => `<div class="eq"><div class="eqt">${title}</div><div class="eqb">${body}</div></div>`;
+  const n = (x, dg = 2) => `<span class="mono">${fmt(x, dg)}</span>`;
+  let h = `<h3>How the numbers are calculated</h3><p class="hint">Units: N, mm, MPa. The plate is analysed once with E = 1 MPa and t = 1 mm (values with subscript 1), then scaled exactly to your material and thickness.</p>`;
+  h += eq('1 · Plane stress, linear elastic', `σ = D ε, &nbsp; D = E/(1 − ν²) · [[1, ν, 0], [ν, 1, 0], [0, 0, (1 − ν)/2]], &nbsp; ν = ${n(M.nu)}`);
+  h += eq('2 · Finite elements, one solve per load case k', `K(x̄) u${sub('', 'k')} = F${sub('', 'k')}, &nbsp; K = Σ${sub('', 'e')} E${sub('', 'e')} t k${sub('', 'e')} (4-node square elements, ${n(d.h)} mm, ${d.nelx} × ${d.nely})`);
+  if (v) {
+    h += eq('3 · Material interpolation (SIMP)', `E${sub('', 'e')} = E${sub('', 'min')} + x̄${sub('', 'e')}<sup>p</sup> (E${sub('', '0')} − E${sub('', 'min')}), &nbsp; p = 3, E${sub('', 'min')} = 10<sup>−9</sup> E${sub('', '0')}`);
+    h += eq('4 · Objective: stiffest layout for the material allowed', `minimise c = Σ${sub('', 'k')} F${sub('', 'k')}<sup>T</sup> u${sub('', 'k')} &nbsp; subject to &nbsp; Σ${sub('', 'e')} x̄${sub('', 'e')} ≤ V* = ${n(v.vf * 100, 0)}% of the design space`);
+    h += eq('5 · Density filter and projection (sets member size)', `x̃${sub('', 'e')} = Σ${sub('', 'i')} H${sub('', 'ei')} x${sub('', 'i')} / Σ${sub('', 'i')} H${sub('', 'ei')}, &nbsp; H${sub('', 'ei')} = max(0, r${sub('', 'min')} − dist(e, i)), &nbsp; r${sub('', 'min')} = ${n(rm)} elements = ${n(rm * d.h, 1)} mm<br>x̄ = [tanh(βη) + tanh(β(x̃ − η))] / [tanh(βη) + tanh(β(1 − η))], &nbsp; η = 0.5, β = 1 → 16`);
+    h += eq('6 · Sensitivity and update (optimality criteria)', `∂c/∂x̄${sub('', 'e')} = −p x̄${sub('', 'e')}<sup>p−1</sup> (E${sub('', '0')} − E${sub('', 'min')}) Σ${sub('', 'k')} u${sub('', 'k,e')}<sup>T</sup> k${sub('', 'e')} u${sub('', 'k,e')}, &nbsp; x${sub('', 'e')} ← clamp(x${sub('', 'e')} √(−∂c/∂x${sub('', 'e')} / Λ), x${sub('', 'e')} ± 0.2), &nbsp; ${n(R.it, 0)} iterations`);
+  }
+  h += eq('7 · Stress', `σ${sub('', 'vm')} = √(σ${sub('', 'x')}² − σ${sub('', 'x')}σ${sub('', 'y')} + σ${sub('', 'y')}² + 3τ${sub('', 'xy')}²) at element centres; peak taken more than ${n(EXCL * d.h, 1)} mm from supports and loads`
+    + (a && b ? `<br>mesh check (Richardson, first order): σ${sub('', '1')} = σ${sub('', b.r + '×')} + (σ${sub('', b.r + '×')} − σ${sub('', a.r + '×')}) · ${a.r}/(${b.r} − ${a.r}) = ${n(b.vmAway, 1)} + (${n(b.vmAway, 1)} − ${n(a.vmAway, 1)}) · ${a.r}/${b.r - a.r} = <b>${n(sh, 1)}</b> MPa·mm` : `<br>σ${sub('', '1')} = ${n(sh, 1)} MPa·mm (mesh check pending)`));
+  h += eq('8 · Out-of-plane buckling', `(K${sub('', 'b')} + λ K${sub('', 'g')}) φ = 0, &nbsp; K${sub('', 'b')} = ∫ B<sup>T</sup> D${sub('', 'b')} B dA, D${sub('', 'b')} = E t³ / (12(1 − ν²)), &nbsp; K${sub('', 'g')} = ∫ G<sup>T</sup> [[N${sub('', 'x')}, N${sub('', 'xy')}], [N${sub('', 'xy')}, N${sub('', 'y')}]] G dA; smallest positive λ (Lanczos): λ${sub('', '1')} = ${isFinite(lh) ? `<span class="mono">${lh.toExponential(3)}</span>` : 'none (no compression)'}`);
+  h += eq('9 · Exact scaling with thickness t and modulus E', `σ = σ${sub('', '1')} / t, &nbsp; δ = δ${sub('', '1')} / (E t), &nbsp; λ = λ${sub('', '1')} E t³`);
+  h += eq('10 · Required thickness (largest wins, rounded up to a standard gauge)',
+    `t${sub('', 'σ')} = σ${sub('', '1')} · FoS / S${sub('', 'y')} = ${n(sh, 1)} × ${n(S.fos)} / ${n(M.Sy, 0)} = <b>${n(tS)}</b> mm<br>`
+    + (S.dlim > 0 ? `t${sub('', 'δ')} = δ${sub('', '1')} / (E δ${sub('', 'allow')}) = ${n(dh, 0)} / (${n(M.E, 0)} × ${n(S.dlim, 3)}) = <b>${n(tD)}</b> mm<br>` : `t${sub('', 'δ')}: no deflection limit set<br>`)
+    + (isFinite(lh) ? `t${sub('', 'b')} = (λ${sub('', 'req')} / (λ${sub('', '1')} E))<sup>1/3</sup> = (${n(S.bfs, 1)} / (${lh.toExponential(3)} × ${n(M.E, 0)}))<sup>1/3</sup> = <b>${n(tB)}</b> mm<br>` : `t${sub('', 'b')}: no buckling (no compression)<br>`)
+    + (S.autoT ? `t = gauge↑(max) = <b>${n(t, 1)}</b> mm (set by ${m.governs})` : `t = ${n(t, 1)} mm (your fixed value)`));
+  h += eq(`11 · Results at t = ${fmt(t, 1)} mm`, `σ = ${n(sh, 1)} / ${n(t, 1)} = ${n(m.sig, 1)} MPa → FoS = ${n(M.Sy, 0)} / ${n(m.sig, 1)} = <b>${n(m.fos)}</b><br>δ = ${n(dh, 0)} / (${n(M.E, 0)} × ${n(t, 1)}) = <b>${n(m.defl, 4)}</b> mm${isFinite(lh) ? `<br>λ = ${lh.toExponential(3)} × ${n(M.E, 0)} × ${n(t, 1)}³ = <b>${n(m.blf)}</b>` : ''}<br>mass = ρ A t = ${n(M.rho, 0)} kg/m³ × ${n(m.area, 0)} mm² × ${n(t, 1)} mm = <b>${n(m.mass, 1)}</b> g`);
+  h += `<p class="hint">Why added load may not change the reported deflection: the thickness is re-sized for every setup, so extra load makes the plate thicker, which brings stress and deflection back down. To see the effect of a load at constant thickness, untick "Size plate thickness" and set the thickness.</p>`;
+  box.innerHTML = h;
+  // validation guide
+  const st = setupText(), pk = peakXY(R), bt = cantileverCheck(R, m), V = $('validate');
+  let g = `<h3>How to validate this design</h3>`;
+  if (bt) g += `<div class="eq"><div class="eqt">Hand check against beam theory (this solid plate is a cantilever)</div><div class="eqb">σ at x = ${n(bt.x, 1)} mm: P(L − x)(H/2)/I = ${n(bt.P, 0)} × ${n(bt.L - bt.x, 1)} × ${n(bt.H / 2, 1)} / ${n(bt.I, 0)} = <b>${n(bt.sig, 1)}</b> MPa, Morphe <b>${n(m.sig, 1)}</b> MPa (${fmt((m.sig / bt.sig - 1) * 100, 1)}%)<br>
+    δ = PL³/(3EI) + PL/(κGA) = <b>${n(bt.defl, 4)}</b> mm, Morphe <b>${n(m.defl, 4)}</b> mm (${fmt((m.defl / bt.defl - 1) * 100, 1)}%)<br><span class="hint">Beam theory leaves out the local indentation under a point load and the flexibility at the clamp, so a deflection a few percent above it is expected; a smooth tip shear in the test suite matches within 0.1%.</span></div></div>`;
+  g += `<ol class="steps">
+    <li><b>Independent FEA</b> (ANSYS, Abaqus, SolidWorks Simulation, or free FreeCAD FEM with CalculiX). Import the DXF (mm, origin at the bottom-left of the design space), extrude ${fmt(t, 1)} mm, ${M.name}: E ${fmt(M.E, 0)} MPa, ν ${fmt(M.nu, 2)}.
+      <br>Supports: ${st.fixes.join('; ') || 'none'}.<br>${st.loads.join('<br>')}${st.zones.length ? '<br>' + st.zones.join('; ') : ''}
+      <br>Refine the mesh at the fillets until the peak stress changes less than 5%. Compare: deflection at the load ${fmt(m.defl, 4)} mm (expect within ±5%); peak von Mises more than ${fmt(EXCL * d.h, 1)} mm from supports and loads ${fmt(m.sig, 1)} MPa${pk ? ` near (${fmt(pk[0], 0)}, ${fmt(pk[1], 0)}) mm` : ''} (±10%); first positive linear-buckling factor ${isFinite(m.blf) ? fmt(m.blf, 2) : 'none'} (±10%, shell model or ≥3 solid elements through the thickness).</li>
+    <li><b>Physical test.</b> Cut two parts. Clamp them as the supports describe, load through a pin at the load point on a UTM, and measure deflection with an LVDT or dial gauge in steps up to the working load. Predicted stiffness ${fmt(m.stiff / 1000, 2)} kN/mm (the fixture adds compliance: measure it separately). ${pk ? `Put a strain gauge near (${fmt(pk[0], 0)}, ${fmt(pk[1], 0)}) mm along the member: expected strain about ${fmt(m.sig / M.E * 1e6, 0)} µε at the working load.` : ''} Local yield should not start below ${fmt(S.fos, 1)}× the working load${m.hotWarn ? ', except at the clamp hot spot, which the clamp detail controls' : ''}.</li>
+    <li><b>Record the comparison</b> in the CSV (Download CAD pack includes validation.txt with these numbers). Three templates checked this way is a sound validation set for a report or paper.</li></ol>`;
+  V.innerHTML = g;
+}
+function validationText(R, m) {
+  const M = MATERIALS[S.mat], d = S.lastDisc, st = setupText(), pk = peakXY(R);
+  return [`Morphe Design Studio: validation sheet for design ${S.selected}`, ``,
+    `Geometry: ${baseName()}.dxf, units mm, origin at the bottom-left of the ${fmt(d.W, 0)} x ${fmt(d.H, 0)} mm design space. Extrude ${fmt(m.t, 1)} mm.`,
+    `Material: ${M.name}, E = ${M.E} MPa, nu = ${M.nu}, yield = ${M.Sy} MPa, density = ${M.rho} kg/m3.`, ``,
+    `Supports:`, ...st.fixes.map(x => `  - ${x}`), `Loads (each case is a separate situation):`, ...st.loads.map(x => `  - ${x}`),
+    ...(st.zones.length ? [`Zones:`, ...st.zones.map(x => `  - ${x}`)] : []), ``,
+    `Predicted (Morphe, mesh-checked, at t = ${fmt(m.t, 1)} mm):`,
+    `  Deflection at the load point:      ${m.defl.toFixed(4)} mm        compare within +/-5%`,
+    `  Peak von Mises, > ${fmt(EXCL * d.h, 1)} mm from supports/loads: ${m.sig.toFixed(1)} MPa${pk ? ` near (${pk[0].toFixed(0)}, ${pk[1].toFixed(0)}) mm` : ''}   compare within +/-10%`,
+    `  Factor of safety on yield:         ${m.fos.toFixed(2)}`,
+    `  First positive buckling factor:    ${isFinite(m.blf) ? m.blf.toFixed(2) : 'none'}            compare within +/-10%`,
+    `  Stiffness at the load:             ${(m.stiff / 1000).toFixed(3)} kN/mm`,
+    `  Hot spot within ${fmt(EXCL * d.h, 1)} mm of supports/loads: ${m.hot.toFixed(1)} MPa (depends on the joint detail)`, ``,
+    `FEA: refine the mesh at the fillets until the peak changes < 5%. Use a shell model, or >= 3 solid elements through the thickness, for buckling.`,
+    `Test: clamp as the supports describe, load through a pin on a UTM, LVDT at the load point, strain gauge at the peak location along the member` + (pk ? ` (expected ${(m.sig / M.E * 1e6).toFixed(0)} microstrain at the working load).` : '.'),
+    ``, `Your results:`, `  FEA deflection (mm):        FEA peak stress (MPa):        FEA buckling factor:`, `  Test stiffness (kN/mm):     Test strain (microstrain):     Notes:`].join('\r\n') + '\r\n';
 }
 function renderPareto() {
   const svg = $('pareto'), pts = [];
@@ -937,7 +1020,7 @@ async function saveFile(filename, data) {
 function ready() { const R = S.results[S.selected]; if (!R || !R.ev) { toast('Wait for this design to finish.'); return null; } if (S.dirty) toast('Exporting the design from the previous setup. Regenerate to export the current one.'); return R; }
 const baseName = () => `morphe_${S.preset}_${S.selected === 'base' ? 'solid' : S.selected}`;
 $('exZip').addEventListener('click', () => { const R = ready(); if (!R) return; const lp = contours(R), m = metrics(R);
-  saveFile(baseName() + '.zip', zip([{ name: baseName() + '.dxf', data: makeDXF(lp) }, { name: baseName() + '.svg', data: makeSVG(lp, m) }, { name: baseName() + `_${fmt(m.t, 1)}mm.stl`, data: makeSTL(R, m.t) }, { name: 'morphe_report.csv', data: makeCSV() }, { name: 'morphe_project.json', data: projectJSON() }])); });
+  saveFile(baseName() + '.zip', zip([{ name: baseName() + '.dxf', data: makeDXF(lp) }, { name: baseName() + '.svg', data: makeSVG(lp, m) }, { name: baseName() + `_${fmt(m.t, 1)}mm.stl`, data: makeSTL(R, m.t) }, { name: 'morphe_report.csv', data: makeCSV() }, { name: 'validation.txt', data: validationText(R, m) }, { name: 'morphe_project.json', data: projectJSON() }])); });
 $('exDxf').addEventListener('click', () => { const R = ready(); if (!R) return; saveFile(baseName() + '.dxf', makeDXF(contours(R))); });
 $('exStl').addEventListener('click', () => { const R = ready(); if (!R) return; const m = metrics(R); saveFile(baseName() + `_${fmt(m.t, 1)}mm.stl`, makeSTL(R, m.t)); });
 $('exSvg').addEventListener('click', () => { const R = ready(); if (!R) return; saveFile(baseName() + '.svg', makeSVG(contours(R), metrics(R))); });
@@ -948,6 +1031,7 @@ $('exCopy').addEventListener('click', async () => { const R = ready(); if (!R) r
 // ---------------- inputs ----------------
 function syncInputs() {
   $('preset').value = S.preset; $('W').value = S.W; $('H').value = S.H; $('res').value = S.res; $('sym').checked = S.sym;
+  $('lmag').value = S.loadMag; $('lang').value = S.loadAng;
   $('mat').value = S.mat; $('proc').value = S.proc; $('minw').value = S.minW; $('fos').value = S.fos; $('bfs').value = S.bfs; $('dlim').value = S.dlim;
   $('autot').checked = S.autoT; $('tfix').value = S.tFix; $('tfix').disabled = S.autoT;
   $('thint').textContent = S.autoT ? 'Thickness is picked per design so each one just meets the requirements.' : 'Every design is checked at this thickness.';
