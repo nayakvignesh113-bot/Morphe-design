@@ -1,0 +1,44 @@
+case           t gov                     σ app  σ ind  ratio sizing/ind |  δ app  δ ind  ratio [  p.5,   p2] |   λ app   λ ind  ratio
+bolted A      14 stress                   99.2   90.5  0.912      1.352 |  0.314  0.310  0.988 [0.988,0.988] |   32.77   34.06  1.039  (not used: not converged)
+bolted B       8 stress                  105.0  113.9  1.085      1.014 |  0.274  0.271  0.990 [0.990,0.990] |   12.79   13.25  1.036
+bolted C       5 buckling                 62.8   68.4  1.089      1.045 |  0.227  0.226  0.996 [0.996,0.996] |    5.65    5.70  1.008
+bolted D      10 stress                  123.5  125.2  1.014      1.085 |  0.425  0.418  0.982 [0.982,0.982] |   12.03   12.49  1.038
+bolted E       5 buckling                108.2  120.2  1.111      0.990 |  0.430  0.431  1.003 [1.003,1.003] |    3.18    3.23  1.017
+bolted F       5 buckling                 63.9   67.3  1.053      1.055 |  0.228  0.227  0.996 [0.996,0.996] |    5.70    5.75  1.008
+cantilever A    8 buckling                 77.1   81.7  1.059      1.048 |  0.536  0.521  0.972 [0.974,0.969] |    4.27    4.44  1.041
+cantilever B    8 buckling                 57.1   59.1  1.035      1.063 |  0.355  0.350  0.984 [0.987,0.980] |    6.81    6.95  1.020
+cantilever C    6 buckling                 63.4   65.7  1.036      1.061 |  0.328  0.324  0.986 [0.992,0.980] |    4.53    4.60  1.015
+cantilever D    8 buckling                 85.2   91.5  1.074      1.024 |  0.533  0.522  0.979 [0.981,0.976] |    4.39    4.52  1.029
+cantilever E    8 buckling                 58.8   61.7  1.049      1.049 |  0.356  0.351  0.984 [0.988,0.980] |    6.80    6.93  1.018
+cantilever F    6 buckling                 62.9   64.7  1.029      1.069 |  0.328  0.324  0.988 [0.994,0.981] |    4.51    4.58  1.016
+beam A       463 stress                   77.4   65.3  0.844      2.111 |  0.942  0.697  0.740 [0.740,0.740] |138910.71141630.09  1.020  (not used: not converged)
+beam B        25 stress                   59.9   62.4  1.041      2.054 |  0.176  0.164  0.933 [0.937,0.928] |   57.36   57.71  1.006  (not used: not converged)
+beam C        10 buckling                 39.9   36.7  0.920      1.270 |  0.167  0.161  0.969 [0.979,0.958] |    5.28    5.27  0.999
+beam D       100 stress                   45.8   55.2  1.205      2.294 |  0.220  0.186  0.849 [0.850,0.848] | 4151.16 2047.45  0.493  (not used: not converged)
+beam E        10 buckling                 46.1   47.5  1.030      1.068 |  0.241  0.230  0.954 [0.962,0.946] |    3.72    3.84  1.034
+beam F        10 buckling                 32.6   32.4  0.995      1.105 |  0.166  0.159  0.960 [0.969,0.949] |    5.37    5.39  1.004
+lbracket A  1001 stress                   77.8  157.1  2.019      0.878 |  8.121  8.671  1.068 [1.063,1.072] |1903676.001789446.13  0.940  (not used: not converged)
+lbracket B    18 stress                   61.4   52.6  0.856      2.349 |  0.314  0.306  0.972 [0.972,0.973] |   61.04   62.69  1.027  (not used: not converged)
+lbracket C     6 stress                  121.0  120.4  0.995      1.106 |  0.657  0.648  0.987 [0.988,0.987] |    3.51    3.55  1.012
+lbracket D   574 stress                  108.0  449.7  4.162      0.307 | 34.084 84.486  2.479 [2.475,2.485] |268358.61186079.44  0.693  (not used: not converged)
+lbracket E     8 stress                  111.7  112.6  1.008      1.091 |  0.684  0.672  0.983 [0.983,0.984] |    5.69    5.86  1.030
+lbracket F     6 stress                  119.2  120.3  1.009      1.090 |  0.657  0.650  0.989 [0.990,0.990] |    3.58    3.64  1.016
+shelf A        4 buckling                 73.6   83.1  1.130      1.042 |  0.204  0.201  0.981 [0.983,0.985] |    3.10    3.15  1.016
+shelf B        4 buckling                 23.9   22.1  0.924      1.298 |  0.100  0.098  0.982 [0.985,0.990] |    4.62    4.67  1.011  (not used: not converged)
+shelf C        4 buckling                 17.1   17.0  0.990      1.196 |  0.065  0.063  0.973 [0.978,0.977] |    6.87    6.93  1.009  (not used: not converged)
+shelf D        4 buckling                 69.1   83.6  1.210      1.060 |  0.183  0.179  0.981 [0.983,0.988] |    3.02    3.08  1.021  (not used: not converged)
+shelf E        4 buckling                 23.5   22.7  0.967      1.211 |  0.101  0.099  0.982 [0.985,0.991] |    4.58    4.64  1.015
+shelf F        4 buckling                 17.4   17.1  0.985      1.253 |  0.065  0.063  0.972 [0.976,0.977] |    6.91    6.98  1.010  (not used: not converged)
+multicase A   10 buckling (load case 2    64.7   64.1  0.990      1.210 |  0.423  0.413  0.977 [0.980,0.974] |    4.25    4.38  1.030  (not used: not converged)
+multicase B    8 buckling (load case 2    59.3   61.8  1.042      1.055 |  0.357  0.351  0.984 [0.987,0.980] |    3.38    3.45  1.022
+multicase C    8 buckling (load case 2    47.2   48.4  1.025      1.073 |  0.247  0.244  0.987 [0.992,0.981] |    5.14    5.22  1.015
+multicase D   10 buckling (load case 2    69.7   76.1  1.091      1.009 |  0.427  0.417  0.976 [0.979,0.973] |    4.29    4.41  1.029
+multicase E    8 buckling (load case 2    58.3   60.7  1.041      1.056 |  0.347  0.341  0.982 [0.985,0.978] |    3.45    3.53  1.021
+multicase F    8 buckling (load case 2    47.1   48.3  1.026      1.072 |  0.245  0.242  0.988 [0.994,0.982] |    5.28    5.35  1.013
+
+peak stress (finest mesh) n=24  mean ratio 1.038  min 0.920  max 1.130  within ±10%: 22/24
+deflection       n=24  mean ratio 0.983  min 0.954  max 1.003  within ±5%: 24/24
+buckling factor  n=24  mean ratio 1.020  min 0.999  max 1.041  within ±5%: 24/24
+max reaction imbalance (N): 0.00010645763904904015
+sizing stress / independent stress: min 0.990  mean 1.073  max 1.270  (>=0.95, i.e. never meaningfully under-predicting: 24/24)
+designs excluded: 12 (12 not converged by the app's own mesh check, 0 with t > 30 mm)

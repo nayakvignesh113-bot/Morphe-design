@@ -315,7 +315,7 @@ ol.steps li { margin-bottom: 10px; }
       <ul>
         <li>2D plane-stress, linear-elastic, static analysis of a plate of uniform thickness. Stress is element-centroid von Mises; elements touching a point load are excluded from the peak because a point load has no finite stress. Your fastener detail sets that local stress.</li>
         <li>Several load cases (separate situations the part must survive, not loads applied together): each design minimizes the summed compliance of all cases, and is then checked against the worst case for stress, deflection and buckling.</li>
-        <li>Mesh check: after each run, every design's cut outline is re-analysed on meshes 2× (and, when affordable, 3×) finer. Sizing uses the finest mesh, and the report shows how much the numbers moved. Peak stress at rounded junctions converges from below (the optimizer mesh under-reads it by 10–25%), so it is extrapolated from the two finest meshes (first-order Richardson) and sizing uses that value; a peak still rising more than 10% on the last refinement is rejected as a sharp corner. Stress within three optimizer elements of a support or point load is reported separately as a hot spot, because it depends on the joint detail rather than the shape.</li>
+        <li>Mesh check: after each run, every design's cut outline is re-analysed on meshes 2× (and, when affordable, 3×) finer. Sizing uses the finest mesh, and the report shows how much the numbers moved. Peak stress at rounded junctions converges from below (the optimizer mesh under-reads it by 10–25%), so it is extrapolated from the two finest meshes (first-order Richardson), a 10% discretisation allowance is applied (calibrated against an independent solver, see benchmark/), and sizing uses the larger value; a peak still rising more than 10% on the last refinement is rejected as a sharp corner. Stress within three optimizer elements of a support or point load is reported separately as a hot spot, because it depends on the joint detail rather than the shape.</li>
         <li>Bolt holes: support bolts hold the hole edge (bonded, slightly stiffer than a real clearance fit); a load pin applies cosine pressure on the loaded half of the hole. Plate bearing σ = F/(d·t) is checked against yield and enters thickness sizing; bolt shear uses class 8.8 through the threads (0.577 S<sub>y</sub> on the stress area). Inside the material ring of a bolted or pinned hole, the bearing check governs and that ring is left out of the FE peak; free holes count in full.</li>
         <li>Thickness is solved exactly: stress scales with 1/t, deflection with 1/(E·t) and the buckling load with E·t³. The largest requirement wins, then it is rounded up to the next standard plate gauge.</li>
         <li>Buckling is a linear eigenvalue check of out-of-plane plate buckling. Bolted supports are clamped, sliding supports are simply supported, and load points are free out of plane. A factor of 3 or more allows for imperfections; real parts with large initial bow need more.</li>
@@ -324,6 +324,8 @@ ol.steps li { margin-bottom: 10px; }
         <li>Your setup is kept in this browser between visits. Use Save project to keep or share it as a file.</li>
         <li>The hand-off file (.json) carries the finished part: outline, holes, thickness, material, supports, loads, requirements and predicted results, in mm, N and MPa, for detailed checks in MechDe or any other tool.</li>
         <li>© 2026 Vignesh Nayak Ullal. All rights reserved. Use, copying or modification needs the author's written permission.</li>
+        <li>Stress at sharp inner corners depends on the radius the cutter leaves. The numbers here assume rounding of about one finest-mesh element (0.7–0.9 mm); a sharper corner reads higher (in the benchmark, one design's peak rose 14% when the mesh was halved). Specify an inner corner radius of at least 1 mm when you clean the outline in CAD.</li>
+        <li>Independent check: 24 finished designs re-solved with a separate solver (triangle mesh, quadratic elements, Morley plates). Deflection and buckling agreed within 5% on all 24; peak stress within 10% on 22 (the app's sizing stress carries a 10% allowance for this). No physical test yet: confirm critical parts by testing.</li>
         <li>Solver verified against the published 88-line topology code (identical compliance history), Timoshenko beam theory (tip deflection within 0.1%), simply supported plate buckling k = 4 (within 0.3%) and the Euler cantilever column (within 0.4%).</li>
       </ul>
     </section>
@@ -1209,9 +1211,12 @@ function verified(R) { return R && R.ver && R.ver.status === 'done' ? R.ver : nu
 // Assess the mesh check. Element-centre stress under-reads peaks at rounded junctions and bending surfaces to first order in the
 // element size, so the peak is extrapolated from the two finest meshes (Richardson, p = 1): sigma = s_b + (s_b - s_a) r_a / (r_b - r_a).
 // A peak still rising more than 10% on the last refinement is treated as a sharp corner that is not converging.
+const STRESS_ALLOWANCE = 1.10;
 function assess(ver) {
   const L = ver.levels.filter(l => l.r !== 'opt'), s = L.map(l => l.vmAway), finest = s[s.length - 1];
   let est = Math.max(...s), sharp = false, p = 1;
+  // discretisation allowance: against an independent conforming quadratic-triangle solution (benchmark/), the finest Q4 peak read 8% low to 13% high; x1.10 keeps sizing within 1% of never under-predicting
+  est = Math.max(est, STRESS_ALLOWANCE * finest);
   if (L.length >= 2) {
     const a = L[L.length - 2], b = L[L.length - 1];
     if (b.vmAway > a.vmAway) { est = Math.max(est, b.vmAway + (b.vmAway - a.vmAway) * a.r / (b.r - a.r)); sharp = b.vmAway > 1.10 * a.vmAway; }
@@ -1690,7 +1695,7 @@ function renderSummary() {
   const save = mb ? (1 - m.mass / mb.mass) * 100 : 0;
   $('verdictSub').textContent = `Factor of safety ${fmt(m.fos, 2)}, buckling load factor ${isFinite(m.blf) ? fmt(m.blf, 1) : 'n/a'}, deflection at the load ${fmt(m.defl, 3)} mm. Thickness set by ${m.governs}.${m.multi ? ` Checked against all ${S.lastDisc.caseIds.length} load cases.` : ''} ${save > 0 ? fmt(save, 0) + '% lighter than a solid plate sized to the same requirement (' + fmt(mb.mass, 0) + ' g at ' + fmt(mb.t, 1) + ' mm).' : ''} Solved in ${secs} s.`
     + (vf && vf.done < vf.total ? ` Checking every design on ${vf.levels.map(x => x + '×').join(', ')} meshes of the cut outline: ${vf.done} of ${vf.total}.`
-      : m.ver ? (m.converged ? ` Mesh check passed: sized on the converged peak stress (${fmt(m.as.extrapPct, 0)}% above the finest mesh) and the fine-mesh deflection and buckling.`
+      : m.ver ? (m.converged ? ` Mesh check passed: sized on the converged peak stress (${fmt(m.as.extrapPct, 0)}% above the finest mesh, including a 10% discretisation allowance) and the fine-mesh deflection and buckling.`
         : ` Mesh check: deflection or buckling still moved more than 5% between the finest meshes, so treat this design's numbers as approximate (see the mesh check below).`)
         + (() => { const bad = VARIANTS.filter(x => { const mm = metrics(S.results[x.id]); return mm && mm.as && (mm.as.sharp || mm.as.outline); }).map(x => x.id);
             return bad.length ? ` Rejected by the mesh check: ${bad.join(', ')}.` : ''; })() : '');
@@ -1743,7 +1748,7 @@ function renderVerify(R, m) {
   const status = ver.status === 'running' ? `<p class="hint">Analysing finer meshes…</p>`
     : ver.status === 'error' ? `<p class="hint" style="color:var(--bad)">The mesh check failed for this design.</p>`
     : `<p class="hint" style="color:${m.converged ? 'var(--ok)' : 'var(--warn)'}">${m.converged ? 'Converged.' : 'Mesh-sensitive.'} Deflection changed ${pct(a.dChange)} and buckling ${pct(a.bChange)} between the two finest meshes (target 5%).
-       ${S.dlim > 0 ? '' : 'No deflection limit is set, so deflection is reported but does not have to converge. '}Peak stress rose ${pct(a.sChange)} on the last refinement, as expected at rounded junctions and bending surfaces, so it is extrapolated (first order) to ${fmt(a.extrapPct, 0)}% above the finest mesh.
+       ${S.dlim > 0 ? '' : 'No deflection limit is set, so deflection is reported but does not have to converge. '}Peak stress rose ${pct(a.sChange)} on the last refinement, as expected at rounded junctions and bending surfaces, so it is extrapolated (first order), and a 10% discretisation allowance is applied (set by comparison with an independent solver), giving ${fmt(a.extrapPct, 0)}% above the finest mesh.
        ${a.outline ? '<b>The cut outline loses material:</b> smoothing the layout into a cuttable profile thins or severs a member, and the stress jumps. Not usable as is; pick a design with bolder webs or raise the minimum member width.'
          : a.sharp ? '<b>A junction behaves like a sharp corner and its stress is not settling.</b> Raise the minimum member width or pick a design with bolder webs.' : ''}
        Stress within ${fmt(EXCL * S.lastDisc.h, 1)} mm of supports and loads is shown as the hot spot. · = not computed on this mesh.</p>`;
@@ -1931,7 +1936,7 @@ function contours(R) {
   for (const start of adj.keys()) {
     if (used.has(start)) continue; const loop = []; let prev = -1, cur = start;
     while (cur !== undefined && !used.has(cur)) { used.add(cur); loop.push(F.cross(cur)); const nx = adj.get(cur).find(q => q !== prev && !used.has(q)); prev = cur; cur = nx; }
-    if (loop.length > 2) loops.push(simplify(loop, 0.12 * F.d.h));
+    if (loop.length > 2) loops.push(simplifyClosed(loop, 0.12 * F.d.h));
   }
   return loops;
 }
@@ -1964,6 +1969,14 @@ function makeSTL(R, t) {
     dv.setUint16(o, 0, true); o += 2;
   }
   return new Uint8Array(buf);
+}
+// Closed loops: split at the point farthest from the start so the two chords are long (a chord between nearly coincident ends would
+// measure every point as 'on the line' and collapse the whole loop to two points), simplify each half, rejoin without repeating the start.
+function simplifyClosed(pts, tol) {
+  const n = pts.length; if (n < 8) return pts;
+  let m = 0, md = -1; for (let i = 1; i < n; i++) { const dd = Math.hypot(pts[i][0] - pts[0][0], pts[i][1] - pts[0][1]); if (dd > md) { md = dd; m = i; } }
+  const A = simplify(pts.slice(0, m + 1), tol), B = simplify(pts.slice(m).concat([pts[0]]), tol);
+  return A.concat(B.slice(1, -1));
 }
 function simplify(pts, tol) {
   if (pts.length < 5) return pts;

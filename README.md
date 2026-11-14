@@ -59,6 +59,19 @@ Note: thickness is re-sized for every setup, so adding load makes the plate thic
 | Statics: support reactions vs applied loads, two cases | ΣR + ΣF = 0 | residual < 10⁻⁵ % |
 | Biaxial plate (σx = −1, σy = +3), reversed-load mode 8.3× easier | Exact positive mode (m = 3, n = 1) | −0.12 % |
 
+### Independent benchmark (`benchmark/`)
+
+The finished designs are re-solved with a separate solver (conforming triangle mesh of the exported outline, quadratic P2 elements, Morley plate elements for buckling, SciPy sparse solves). 24 designs from the six templates, all those the app's own mesh check marks converged, were compared; the criteria were fixed before the run.
+
+| Quantity | Independent / app | Within target |
+|---|---|---|
+| Deflection at load | 0.954 – 1.003 (mean 0.983) | 24 / 24 within 5 % |
+| Buckling factor | 0.999 – 1.041 (mean 1.020; app lower in 23 of 24) | 24 / 24 within 5 % |
+| Peak stress, finest app mesh | 0.920 – 1.130 (mean 1.038) | 22 / 24 within 10 % (misses: bolted E +11 %, shelf A +13 %) |
+| Sizing stress / independent peak, after the 10 % allowance | 0.990 – 1.27 (mean 1.07) | never more than 1 % under |
+
+The benchmark also found and fixed a defect (closed outlines could collapse to two points in the DXF, SVG and hand-off for some designs; the browser suite now checks every design) and showed that the app's finest mesh read peak stress up to 8 % low on some designs, which is why sizing now carries a 10 % discretisation allowance. One limit stays open: stress at sharp inner corners depends on the cut corner radius, and on bolted E the independent peak kept rising as the mesh was refined (107, 120, 137 MPa at 2, 1, 0.5 element sizes). Specify an inner corner radius of at least 1 mm when cleaning the outline in CAD. The independent solver shares the app's modelling assumptions (plane stress, Kirchhoff plates, bonded bolt edge), so this checks the numerics, not the physics. No physical test has been done yet. Details and reproduction steps: `benchmark/README.md`.
+
 ## Why the mesh check matters
 
 On the cantilever template, the optimizer mesh under-reads the peak stress at member junctions by 10–25%. Without the check, design A reported FoS 4.22; on the mesh-checked outline it is 3.22. The check also catches outlines that lose a member when smoothed for cutting, and square re-entrant corners. On the L-bracket with a square keep-out corner, every design is rejected and the tool offers to round the corner; at R 12 mm the designs converge.

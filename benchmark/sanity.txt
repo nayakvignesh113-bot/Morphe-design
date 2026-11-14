@@ -1,0 +1,9 @@
+cantilever size 2.0: tip defl 1.16635 mm vs Timoshenko 1.16867  (-0.20%); reactions [6.362483873090241e-10, 100.00000000017775] loads [0.0, -100.0]
+cantilever size 1.0: tip defl 1.16649 mm vs Timoshenko 1.16867  (-0.19%); reactions [9.130758371611591e-10, 99.99999998281051] loads [0.0, -100.0]
+cantilever size 0.5: tip defl 1.16592 mm vs Timoshenko 1.16867  (-0.24%); reactions [-2.678369526165625e-09, 99.99999991905953] loads [0.0, -100.0]
+simply supported square: 568 triangles  k = 3.9651 vs 4.0  (-0.87%)
+simply supported square: 2247 triangles  k = 3.9908 vs 4.0  (-0.23%)
+simply supported square: 8975 triangles  k = 3.9978 vs 4.0  (-0.06%)
+clamped square: 568 triangles  k = 9.6513 vs 10.07  (-4.16%)
+clamped square: 2247 triangles  k = 9.9598 vs 10.07  (-1.09%)
+clamped square: 8975 triangles  k = 10.0458 vs 10.07  (-0.24%)
