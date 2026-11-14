@@ -6,10 +6,11 @@ There is no install and no server. Everything runs client-side in one `index.htm
 
 ## Use
 
-1. Pick a template (cantilever, simply supported beam, L-bracket, wall shelf bracket, bracket with three load cases) or start from a blank plate.
+1. Pick a template (bolted bracket, cantilever, simply supported beam, L-bracket, wall shelf bracket, bracket with three load cases) or start from a blank plate.
 2. On the drawing board:
    - **Support**: drag along an edge, or tap for a bolt point. Choose fixed, slides horizontally or slides vertically.
    - **Load**: set its size (N) and direction (0° right, 90° up, 270° down) in the toolbar, then tap; or drag from the point to aim it. Edit Fx/Fy in the list afterwards.
+   - **Bolt hole**: pick a bolt (M4–M20). The tool cuts the ISO 273 clearance hole and keeps a material ring 1.5 d around it. A *support bolt* holds the hole edge; a *load pin* pushes on the side of the hole facing the load (cosine bearing pressure). Checks: plate bearing F/(d·t) (enters thickness sizing), bolt shear (class 8.8, through the threads), edge distance ≥ 1.5 d, spacing ≥ 3 d. Holes export as exact DXF circles.
    - **Load cases**: press **+ Load case** for a separate situation the part must survive (e.g. working load, a sideways knock, reversed load). New loads go into the active case; move a load between cases from its row. Loads in the same case act together.
    - **Keep-out**: a region that must stay empty (clearance for a bolt head, shaft or neighbouring part). Give rectangles a corner radius.
    - **Keep-solid**: a region that must stay material (mounting flange, seating face, area around a hole to be drilled).
@@ -34,6 +35,7 @@ Note: thickness is re-sized for every setup, so adding load makes the plate thic
 | Clean-up | Threshold at 0.5; remove islands not connected to a support; fill enclosed slivers smaller than a min-width square; widen members narrower than the minimum width (morphological opening check) |
 | Buckling | Linear eigenvalue of out-of-plane plate buckling: ACM 12-dof plate elements, geometric stiffness from the in-plane stresses, Lanczos (full re-orthogonalization, residual test) for the smallest positive load factor, which stays correct when the reversed-load mode dominates. Bolted supports clamped, sliding supports simply supported |
 | Mesh check | After each run, every design's cut outline (the smoothed layout that becomes the DXF) is resampled onto the same, 2× and 3× finer meshes and re-analysed. Peak stress, which element-centre stress under-reads at rounded junctions and bending surfaces, is extrapolated from the two finest meshes (first-order Richardson). Sizing uses that value and the fine-mesh deflection and buckling. Designs whose peak still rises >10% on the last refinement (a sharp corner) or whose outline loses material when smoothed are rejected. Stress within 3 optimizer elements of supports and point loads is reported separately as a hot spot |
+| Bolt holes | Support bolts: hole-edge nodes held. Load pins: nodal forces ∝ max(0, n̂·F̂) over the hole edge. Reactions R = K u − F per hole and case give the bearing force. The material ring is checked by bearing, not by the FE peak (a held, stair-stepped hole edge is not a reliable FE stress) |
 | Load cases | Every design is analysed for every case: stress, deflection and buckling are each taken from the worst case, and the report names which case governs |
 | Sizing | Solved with E = 1, t = 1. Stress ∝ 1/t, deflection ∝ 1/(E·t), buckling load ∝ E·t³, so each required thickness is exact; the largest one wins, rounded up to a standard gauge |
 | Stress | Element-centroid von Mises. Elements touching a point load are excluded from the peak (a point load has no finite stress) |
@@ -53,6 +55,7 @@ Note: thickness is re-sized for every setup, so adding load makes the plate thic
 | Simply supported square plate, uniaxial compression | N_cr = 4π²D/b² | −0.07 % |
 | Cantilever strip column (ν = 0) | Euler π²EI/4L² | 0.00 % |
 | Plate in pure tension | No buckling | No buckling |
+| Statics: support reactions vs applied loads, two cases | ΣR + ΣF = 0 | residual < 10⁻⁵ % |
 | Biaxial plate (σx = −1, σy = +3), reversed-load mode 8.3× easier | Exact positive mode (m = 3, n = 1) | −0.12 % |
 
 ## Why the mesh check matters

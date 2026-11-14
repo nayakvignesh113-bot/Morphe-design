@@ -467,8 +467,8 @@ function evaluate(job, field, h) {
   // zone within exclR mm of supports and load points: idealized boundary conditions make stress there mesh-dependent
   const near = new Uint8Array(nel);
   if (job.exclR > 0) {
-    const bcNode = new Uint8Array(mesh.nn);
-    for (let n = 0; n < mesh.nn; n++) if (fixedNode[n] || loadNodeC.some(ln => ln[n])) bcNode[n] = 1;
+    const bcNode = job.bcMask ? job.bcMask : new Uint8Array(mesh.nn);
+    if (!job.bcMask) for (let n = 0; n < mesh.nn; n++) if (fixedNode[n] || loadNodeC.some(ln => ln[n])) bcNode[n] = 1;
     const seed = [];
     for (let e = 0; e < nel; e++) for (let a = 0; a < 4; a++) if (bcNode[mesh.edof[e*8+2*a] >> 1]) { seed.push(e); break; }
     const R = job.exclR / h, Ri = Math.ceil(R);
@@ -478,7 +478,7 @@ function evaluate(job, field, h) {
   }
   const vmAwayC = [], awayElC = [];
   let vmZone = 0;
-  const SigC = [], vmMaxC = [], dLoadC = [], dMaxC = [], compC = [];
+  const SigC = [], vmMaxC = [], dLoadC = [], dMaxC = [], compC = [], reactC = [];
   let nSolid = 0, vmMaxAll = 0, vmEl = -1;
   for (let e = 0; e < nel; e++) if (solid[e]) nSolid++;
   for (let k = 0; k < nCases; k++) {
@@ -493,12 +493,22 @@ function evaluate(job, field, h) {
       let atLoad = false;
       for (let a = 0; a < 4; a++) if (ln[mesh.edof[e*8+2*a] >> 1]) atLoad = true;
       if (!atLoad && s > peak) { peak = s; peakEl = e; }
-      if (near[e]) vmZone = Math.max(vmZone, s); else if (s > (vmAwayC[k] || 0)) { vmAwayC[k] = s; awayElC[k] = e; }
+      // job.ignore: bolt-hole rings, which the bearing check covers (a bonded hole edge is not a reliable FE stress)
+      if (job.ignore && job.ignore[e]) { /* covered by the bearing check */ }
+      else if (near[e]) vmZone = Math.max(vmZone, s); else if (s > (vmAwayC[k] || 0)) { vmAwayC[k] = s; awayElC[k] = e; }
     }
     if (vmAwayC[k] === undefined) vmAwayC[k] = 0;
     let dMx = 0, dLd = 0;
     for (let i = 0; i < mesh.nn; i++) { const m = Math.hypot(U[2*i], U[2*i+1]); if (touched[i]) dMx = Math.max(dMx, m); if (ln[i]) dLd = Math.max(dLd, m); }
     let cp = 0; for (let d = 0; d < mesh.ndof; d++) cp += Fs[k][d] * U[d];
+    if (job.reactions) {
+      const Rk = new Float64Array(mesh.ndof);
+      for (let e = 0; e < nel; e++) { const o = e*8, s = Ev[e];
+        for (let a = 0; a < 8; a++) { const ga = mesh.edof[o+a]; if (!job.fixed[ga]) continue;
+          let f = 0; for (let b2 = 0; b2 < 8; b2++) f += KE[a*8+b2] * U[mesh.edof[o+b2]]; Rk[ga] += s * f; } }
+      for (let dd = 0; dd < mesh.ndof; dd++) if (job.fixed[dd]) Rk[dd] -= Fs[k][dd];
+      reactC.push(new Float32Array(Rk));
+    }
     SigC.push(Sig); vmMaxC.push(peak); dLoadC.push(dLd); dMaxC.push(dMx); compC.push(cp);
     if (peak >= Math.max(...vmMaxC)) vmEl = peakEl;
   }
@@ -535,7 +545,7 @@ function evaluate(job, field, h) {
     }
   }
   const U32 = new Float32Array(U);
-  return { awayXY: (() => { const e = awayElC[awayCase]; return e === undefined ? null : [(Math.floor(e / nely) + 0.5) * h, (e % nely + 0.5) * h]; })(), vmAway, vmAwayC, awayCase: job.exclR > 0 ? awayCase : vmCase, vmZone, nCases, vmCase, dCase, lamCase, vmMaxC, dLoadC, lamC, lamB, modeB, added, filled, solid, vm, vmMax, vmMaxAll, vmEl, dmag, dMax, dLoad, comp, nSolid, holes, removed, brokenLoads, thin, thinCount, U: U32 };
+  return { reactC, awayXY: (() => { const e = awayElC[awayCase]; return e === undefined ? null : [(Math.floor(e / nely) + 0.5) * h, (e % nely + 0.5) * h]; })(), vmAway, vmAwayC, awayCase: job.exclR > 0 ? awayCase : vmCase, vmZone, nCases, vmCase, dCase, lamCase, vmMaxC, dLoadC, lamC, lamB, modeB, added, filled, solid, vm, vmMax, vmMaxAll, vmEl, dmag, dMax, dLoad, comp, nSolid, holes, removed, brokenLoads, thin, thinCount, U: U32 };
 }
 
 if (typeof module !== 'undefined') module.exports = { feSolveMulti, buckle, makePlateKE, makeKE, makeMesh, feSolve, makeFilter, optimize, evaluate, components, morphOpen };

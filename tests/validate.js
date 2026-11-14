@@ -91,5 +91,21 @@ const check = (name, got, want, tolPct) => {
   const idx = two.vmCase === 1 && two.dCase === 1 && two.lamCase === 1;
   console.log(`${idx ? 'PASS' : 'FAIL'}  governing case identified for stress, deflection, buckling (${two.vmCase}, ${two.dCase}, ${two.lamCase})`); if (!idx) fail++;
 }
+// 6. Statics: support reactions balance the applied loads (both components, every case)
+{
+  const nelx = 60, nely = 30, mesh = C.makeMesh(nelx, nely);
+  const fixed = new Uint8Array(mesh.ndof);
+  for (let iy = 0; iy <= nely; iy++) { const n = mesh.node(0, iy); fixed[2 * n] = fixed[2 * n + 1] = 1; }
+  const F1 = new Float64Array(mesh.ndof), F2 = new Float64Array(mesh.ndof);
+  F1[2 * mesh.node(nelx, 10) + 1] = -700; F1[2 * mesh.node(40, 0)] = 250;
+  F2[2 * mesh.node(nelx, 25)] = -400; F2[2 * mesh.node(nelx, 25) + 1] = 900;
+  const r = C.evaluate({ nelx, nely, nu: 0.3, Fs: [F1, F2], fixed, passive: new Int8Array(nelx * nely).fill(2), reactions: true, buckling: false }, new Float64Array(nelx * nely).fill(1), 1);
+  [F1, F2].forEach((F, k) => {
+    let fx = 0, fy = 0, rx = 0, ry = 0;
+    for (let n = 0; n < mesh.nn; n++) { fx += F[2 * n]; fy += F[2 * n + 1]; rx += r.reactC[k][2 * n]; ry += r.reactC[k][2 * n + 1]; }
+    const err = Math.hypot(rx + fx, ry + fy) / Math.hypot(fx, fy) * 100, ok = err < 1e-3;
+    console.log(`${ok ? 'PASS' : 'FAIL'}  reactions balance applied load, case ${k + 1} (residual ${err.toExponential(2)}%)`); if (!ok) fail++;
+  });
+}
 console.log(fail ? `${fail} check(s) failed` : 'All checks passed');
 process.exit(fail ? 1 : 0);

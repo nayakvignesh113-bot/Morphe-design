@@ -18,6 +18,11 @@ const PROCESSES = {
   am:     { name: 'SLS / metal additive', minW: 1.2, cut: false },
   custom: { name: 'Custom minimum width', minW: null, cut: false },
 };
+// ISO 273 medium-series clearance holes; property class 8.8 bolt yield (ISO 898-1)
+const BOLTS = { M4: { d: 4, hole: 4.5, As: 8.78 }, M5: { d: 5, hole: 5.5, As: 14.2 }, M6: { d: 6, hole: 6.6, As: 20.1 }, M8: { d: 8, hole: 9, As: 36.6 }, M10: { d: 10, hole: 11, As: 58 },
+  M12: { d: 12, hole: 13.5, As: 84.3 }, M16: { d: 16, hole: 17.5, As: 157 }, M20: { d: 20, hole: 22, As: 245 } };
+const boltSy = (b) => BOLTS[b].d <= 16 ? 640 : 660;
+const ringR = (f) => Math.max(1.5 * BOLTS[f.bolt].hole, BOLTS[f.bolt].hole / 2 + S.minW);  // edge distance 1.5 d from the hole centre
 const GAUGES = [0.5, 0.8, 1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10, 12, 14, 16, 18, 20, 22, 25, 28, 30, 32, 36, 40, 45, 50, 60, 70, 80, 100];
 const RES = { draft: 1800, std: 3200, fine: 6400 };
 const VARIANTS = [
@@ -30,6 +35,10 @@ const VARIANTS = [
 ];
 
 const PRESETS = {
+  bolted: () => ({ W: 160, H: 100, sym: false, features: [
+    { type: 'hole', role: 'support', bolt: 'M8', x: 14, y: 14 },
+    { type: 'hole', role: 'support', bolt: 'M8', x: 14, y: 86 },
+    { type: 'hole', role: 'load', bolt: 'M10', lc: 1, x: 142, y: 50, fx: 0, fy: -3000 } ] }),
   cantilever: () => ({ W: 200, H: 100, sym: false, features: [
     { type: 'fix', dof: 'xy', x0: 0, y0: 0, x1: 0, y1: 100 },
     { type: 'load', x: 200, y: 50, fx: 0, fy: -2000 } ] }),
@@ -58,14 +67,15 @@ const PRESETS = {
 
 // ---------------- state ----------------
 const S = {
-  preset: 'cantilever', W: 200, H: 100, res: 'std', sym: false,
-  loadMag: 1000, loadAng: 270, lc: 1, nLC: 1, mat: 'al6061', proc: 'laser', minW: 3, fos: 2, bfs: 3, dlim: 0, autoT: true, tFix: 5,
+  preset: 'bolted', W: 160, H: 100, res: 'std', sym: false,
+  holeRole: 'support', holeBolt: 'M8', loadMag: 1000, loadAng: 270, lc: 1, nLC: 1, mat: 'al6061', proc: 'laser', minW: 3, fos: 2, bfs: 3, dlim: 0, autoT: true, tFix: 5,
   features: [], tool: 'load', supType: 'xy', voidShape: 'rect', view: 'shape',
   run: null, results: {}, selected: 'B', dirty: false, lastDisc: null,
 };
 const $ = (id) => document.getElementById(id);
 const caseOf = (f) => f.lc || 1;
-const numCases = () => Math.max(S.nLC || 1, ...S.features.filter(f => f.type === 'load').map(caseOf));
+const isLoad = (f) => f.type === 'load' || (f.type === 'hole' && f.role === 'load');
+const numCases = () => Math.max(S.nLC || 1, ...S.features.filter(isLoad).map(caseOf));
 const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const fmt = (v, d = 1) => (v === undefined || v === null || !isFinite(v)) ? '–' : v.toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d });
 let toastT;
@@ -75,7 +85,7 @@ function applyPreset(key, noSnap) {
   if (!noSnap) snapshot();
   const p = PRESETS[key]();
   S.preset = key; S.W = p.W; S.H = p.H; S.sym = p.sym; S.features = p.features;
-  S.nLC = Math.max(1, ...p.features.filter(f => f.type === 'load').map(f => f.lc || 1)); S.lc = 1;
+  S.nLC = Math.max(1, ...p.features.filter(isLoad).map(f => f.lc || 1)); S.lc = 1;
   syncInputs(); markDirty(); draw();
 }
 
@@ -117,7 +127,7 @@ function discretize(opts = {}) {
     if (hit.length <= 5) for (const [ix, iy] of hit) pads.push(nodeXY(ix, iy));
   }
   let nLoads = 0, loadInVoid = false;
-  const caseIds = [...new Set(S.features.filter(f => f.type === 'load').map(caseOf))].sort((a, b) => a - b);
+  const caseIds = [...new Set(S.features.filter(isLoad).map(caseOf))].sort((a, b) => a - b);
   const Fs = caseIds.map(() => new Float64Array(ndof));
   for (const f of S.features) if (f.type === 'load') {
     const [ix, iy] = nearest(f.x, f.y), n = node(ix, iy), Fk = Fs[caseIds.indexOf(caseOf(f))];
@@ -128,12 +138,49 @@ function discretize(opts = {}) {
     const [x, y] = center(ix, iy); if (Math.hypot(x - px, y - py) <= padR) passive[ix * nely + iy] = 2; }
   for (const f of S.features) if (f.type === 'void') for (let ix = 0; ix < nelx; ix++) for (let iy = 0; iy < nely; iy++) {
     const [x, y] = center(ix, iy); if (inside(f, x, y)) { const e = ix * nely + iy; if (passive[e] === 2) loadInVoid = true; passive[e] = 1; } }
+  // bolt holes: clearance hole (void) inside a ring of material (edge distance 1.5 d); exact geometry kept in the mesh check
+  const holePassive = new Int8Array(nel), holeOf = new Int16Array(nel).fill(-1), holes = [], warnings = [], ignore = new Uint8Array(nel);
+  const bcMask = new Uint8Array(nn);
+  S.features.forEach((f, fi) => { if (f.type !== 'hole') return;
+    const rh = BOLTS[f.bolt].hole / 2, rr = ringR(f);
+    for (let ix = 0; ix < nelx; ix++) for (let iy = 0; iy < nely; iy++) { const [x, y] = center(ix, iy), r = Math.hypot(x - f.x, y - f.y), e = ix * nely + iy;
+      if (r <= rh) { passive[e] = 1; holePassive[e] = 1; holeOf[e] = holes.length; }
+      else if (r <= rr && holePassive[e] !== 1) { if (passive[e] === 1) loadInVoid = true; passive[e] = 2; holePassive[e] = 2; }
+      if (r <= rr + 1e-9 && f.role !== 'free') ignore[e] = 1; }
+    holes.push({ fi, f, rh, rr, nodes: [] }); });
+  holes.forEach((H, k) => {
+    // edge nodes of the hole: touch both this hole's void and material
+    for (let ix = 0; ix <= nelx; ix++) for (let iy = 0; iy <= nely; iy++) {
+      let inHole = false, inMat = false;
+      for (const [a, b] of [[-1, -1], [0, -1], [-1, 0], [0, 0]]) { const ex = ix + a, ey = iy + b; if (ex < 0 || ey < 0 || ex >= nelx || ey >= nely) continue;
+        const e = ex * nely + ey; if (holeOf[e] === k) inHole = true; else if (passive[e] !== 1) inMat = true; }
+      if (inHole && inMat) H.nodes.push([ix, iy]);
+    }
+    if (!H.nodes.length) { H.nodes.push(nearest(H.f.x, H.f.y)); H.pointLike = true; }
+    const f = H.f;
+    if (f.role === 'support') for (const [ix, iy] of H.nodes) { const n = node(ix, iy);
+      if (!fixed[2 * n]) { fixed[2 * n] = 1; nFixX++; } if (!fixed[2 * n + 1]) { fixed[2 * n + 1] = 1; nFixY++; } if (H.pointLike) bcMask[n] = 1; }
+    if (f.role === 'load') {
+      // pin bearing: cosine pressure on the half of the hole the pin pushes against
+      const Fk = Fs[caseIds.indexOf(caseOf(f))], mag = Math.hypot(f.fx, f.fy) || 1, ux = f.fx / mag, uy = f.fy / mag;
+      const w = H.nodes.map(([ix, iy]) => { const [x, y] = nodeXY(ix, iy), r = Math.hypot(x - f.x, y - f.y) || 1; return Math.max(0, ((x - f.x) * ux + (y - f.y) * uy) / r); });
+      let sw = w.reduce((a, b) => a + b, 0); if (!(sw > 0)) { w.fill(1); sw = w.length; }
+      H.nodes.forEach(([ix, iy], j) => { const n = node(ix, iy); Fk[2 * n] += f.fx * w[j] / sw; Fk[2 * n + 1] += f.fy * w[j] / sw; if (H.pointLike) bcMask[n] = 1; });
+      nLoads++;
+    }
+    H.nodeIds = H.nodes.map(([ix, iy]) => node(ix, iy));
+    const dh = 2 * H.rh, edge = Math.min(f.x, f.y, S.W - f.x, S.H - f.y);
+    if (edge < 1.5 * dh - 1e-9) warnings.push(`Hole ${k + 1} (${f.bolt}) is ${fmt(edge, 1)} mm from the edge of the design space; keep at least 1.5 d = ${fmt(1.5 * dh, 1)} mm.`);
+    holes.forEach((G, j) => { if (j > k) { const sp = Math.hypot(G.f.x - f.x, G.f.y - f.y), need = 1.5 * (dh + 2 * G.rh); if (sp < need - 1e-9) warnings.push(`Holes ${k + 1} and ${j + 1} are ${fmt(sp, 1)} mm apart; keep at least 3 d = ${fmt(need, 1)} mm.`); } });
+  });
+  for (const n of fixNodes) bcMask[n] = 1;
+  for (const f of S.features) if (f.type === 'load') { const [ix, iy] = nearest(f.x, f.y); bcMask[node(ix, iy)] = 1; }
   const errors = [];
   if (!nLoads) errors.push('Add at least one load: pick the Load tool and tap where the force acts.');
   if (nFixX === 0 || nFixY === 0 || nFixX + nFixY < 3) errors.push('The part can still move or spin. Add a fixed support, or supports that hold it both horizontally and vertically.');
-  if (loadInVoid) errors.push('A load or support sits inside a keep-out zone. Move it onto material.');
+  if (loadInVoid) errors.push('A load, support or bolt hole overlaps a keep-out zone. Move it onto material.');
   const rmin0 = Math.max(1.5, 0.6 * S.minW / h);
-  return { W: S.W, H: S.H, nelx, nely, hx, hy, h, nel, ndof, passive, Fs, caseIds, fixed, errors, rmin0, nu: MATERIALS[S.mat].nu };
+  return { W: S.W, H: S.H, nelx, nely, hx, hy, h, nel, ndof, passive, holePassive, bcMask, ignore, holes, warnings, Fs, caseIds, fixed, errors, rmin0, nu: MATERIALS[S.mat].nu };
 }
 
 // ---------------- worker pool ----------------
@@ -145,11 +192,11 @@ function startRun() {
   pool.forEach(w => w.terminate()); pool = []; vpool.forEach(w => w.terminate()); vpool = []; S.verify = null;
   const runId = Date.now();
   S.run = { runId, disc: d, queue: [], active: 0, done: 0, total: VARIANTS.length + 1, started: performance.now() };
-  S.results = {}; S.dirty = false; S.lastDisc = d; showBanner(symmetryIssue());
+  S.results = {}; S.dirty = false; S.lastDisc = d; showBanner([symmetryIssue(), ...d.warnings].filter(Boolean).join(' '));
   const rB = Math.max(2.5, 1.8 * d.rmin0);
-  const base = { runId, nelx: d.nelx, nely: d.nely, nu: d.nu, Fs: d.Fs, fixed: d.fixed, passive: d.passive, h: d.h, minWidth: S.minW, symX: S.sym, enforceWidth: true, exclR: EXCL * d.h };
-  S.run.queue.push({ ...base, jobId: 'base', kind: 'eval' });
-  for (const v of VARIANTS) S.run.queue.push({ ...base, jobId: v.id, kind: 'opt', vf: v.vf, rmin: v.bold ? rB : d.rmin0, maxIter: 110, penal: 3 });
+  const base = { runId, bcMask: d.bcMask, ignore: d.ignore, nelx: d.nelx, nely: d.nely, nu: d.nu, Fs: d.Fs, fixed: d.fixed, passive: d.passive, h: d.h, minWidth: S.minW, symX: S.sym, enforceWidth: true, exclR: EXCL * d.h };
+  S.run.queue.push({ ...base, jobId: 'base', kind: 'eval', reactions: true });
+  for (const v of VARIANTS) S.run.queue.push({ ...base, reactions: true, jobId: v.id, kind: 'opt', vf: v.vf, rmin: v.bold ? rB : d.rmin0, maxIter: 110, penal: 3 });
   for (const j of S.run.queue) S.results[j.jobId] = { id: j.jobId, status: 'queued', it: 0, x: null, ev: null };
   if (!S.results[S.selected]) S.selected = 'B';
   const nW = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
@@ -208,7 +255,7 @@ function startVerify() {
   if (discs.some(d => d.errors.length)) return;
   const queue = [];
   levels.forEach((r, li) => { const d = discs[li];
-    for (const id of ids) queue.push({ kind: 'eval', runId: S.run.runId, jobId: id, level: r, nelx: d.nelx, nely: d.nely, nu: d.nu, Fs: d.Fs, fixed: d.fixed, passive: new Int8Array(d.nel),
+    for (const id of ids) queue.push({ kind: 'eval', runId: S.run.runId, jobId: id, level: r, nelx: d.nelx, nely: d.nely, nu: d.nu, Fs: d.Fs, fixed: d.fixed, passive: d.holePassive, bcMask: d.bcMask, ignore: d.ignore,
       h: d.h, minWidth: S.minW, enforceWidth: false, exclR: EXCL * d0.h, buckling: r <= 2, field: sampleField(S.results[id], d0, d) }); });
   for (const id of ids) { const R = S.results[id]; R.ver = { levels: [levelOf(R.ev, 'opt', d0.nel)], pending: levels.length, status: 'running' }; }
   S.verify = { runId: S.run.runId, queue, total: queue.length, done: 0, levels, started: performance.now() };
@@ -278,9 +325,19 @@ function metrics(R) {
   const tS = src.vmAway * S.fos / M.Sy;
   const tD = S.dlim > 0 ? src.dLoad / (M.E * S.dlim) : 0;
   const lamHat = src.lamB, tB = isFinite(lamHat) && lamHat > 0 ? Math.cbrt(S.bfs / (lamHat * M.E)) : 0;
-  const tReq = Math.max(tS, tD, tB);
+  // bolt holes: plate bearing F/(d t) and bolt shear F/As (class 8.8, through the threads)
+  const holeChecks = (d.holes || []).filter(H => H.f.role !== 'free').map((H, i) => {
+    let F = 0, kc = 0;
+    if (H.f.role === 'support' && ev.reactC) ev.reactC.forEach((Rk, k) => { let rx = 0, ry = 0; for (const n of H.nodeIds) { rx += Rk[2 * n]; ry += Rk[2 * n + 1]; } const mg = Math.hypot(rx, ry); if (mg > F) { F = mg; kc = k; } });
+    if (H.f.role === 'load') { F = Math.hypot(H.f.fx, H.f.fy); kc = d.caseIds.indexOf(caseOf(H.f)); }
+    const dh = 2 * H.rh, B = BOLTS[H.f.bolt], nb = 0.577 * boltSy(H.f.bolt) / Math.max(F / B.As, 1e-12);
+    const need = Object.keys(BOLTS).find(b => 0.577 * boltSy(b) / Math.max(F / BOLTS[b].As, 1e-12) >= S.fos);
+    return { idx: d.holes.indexOf(H) + 1, f: H.f, dh, F, kc, tBr: F * S.fos / (dh * M.Sy), nb, boltOK: nb >= S.fos, need };
+  });
+  const tBr = Math.max(0, ...holeChecks.map(c => c.tBr)), brHole = holeChecks.find(c => c.tBr === tBr);
+  const tReq = Math.max(tS, tD, tB, tBr);
   const multi = d.caseIds.length > 1, cn = (k) => multi ? ` (load case ${d.caseIds[k || 0]})` : '';
-  const governs = (tReq === tB && tB > 0 ? 'buckling' + cn(src.lamCase) : tReq === tD && tD > 0 ? 'deflection' + cn(src.dCase) : 'stress' + cn(src.awayCase));
+  const governs = (tReq === tBr && tBr > 0 ? `bearing at hole ${brHole.idx}` + cn(brHole.kc) : tReq === tB && tB > 0 ? 'buckling' + cn(src.lamCase) : tReq === tD && tD > 0 ? 'deflection' + cn(src.dCase) : 'stress' + cn(src.awayCase));
   const t = S.autoT ? gaugeUp(tReq) : S.tFix;
   const sig = src.vmAway / t, fos = M.Sy / sig, defl = src.dLoad / (M.E * t), dmax = Math.max(ev.dMax / (M.E * t), defl);
   const hot = src.vmZone / t, hotWarn = hot > M.Sy / S.fos;
@@ -288,10 +345,10 @@ function metrics(R) {
   const mass = M.rho * 1e-9 * area * t * 1000;
   const Fd = d.Fs[src.dCase || 0]; let Ftot = 0; for (let i = 0; i < Fd.length; i++) Ftot += Fd[i] * Fd[i]; Ftot = Math.sqrt(Ftot);
   const blf = isFinite(lamHat) ? lamHat * M.E * t * t * t : Infinity;
-  const pass = fos >= S.fos - 1e-9 && (!(S.dlim > 0) || defl <= S.dlim + 1e-12) && blf >= S.bfs * (1 - 1e-9) && !ev.brokenLoads && !src.brokenLoads && !(as && (as.sharp || as.outline));
+  const pass = fos >= S.fos - 1e-9 && (!(S.dlim > 0) || defl <= S.dlim + 1e-12) && blf >= S.bfs * (1 - 1e-9) && !ev.brokenLoads && !src.brokenLoads && !(as && (as.sharp || as.outline)) && holeChecks.every(c => c.boltOK && c.F * S.fos / (c.dh * t) <= M.Sy * (1 + 1e-9));
   const thinPct = ev.nSolid ? ev.thinCount / ev.nSolid * 100 : 0;
   const webWarn = PROCESSES[S.proc].cut && t > S.minW * 1.5;
-  return { src, ver, as, converged: !!(as && as.converged), hot, hotWarn, cn, multi, blf, governs, area, tReq, t, sig, fos, defl, dmax, mass, stiff: defl > 0 ? Ftot / defl : 0, pass, thinPct, webWarn, holes: ev.holes, added: ev.added * d.hx * d.hy };
+  return { holeChecks, tBr, src, ver, as, converged: !!(as && as.converged), hot, hotWarn, cn, multi, blf, governs, area, tReq, t, sig, fos, defl, dmax, mass, stiff: defl > 0 ? Ftot / defl : 0, pass, thinPct, webWarn, holes: ev.holes, added: ev.added * d.hx * d.hy };
 }
 function computeDistinct() {
   const ids = VARIANTS.map(v => v.id).filter(id => S.results[id] && S.results[id].ev);
@@ -384,6 +441,7 @@ function draw() {
   // domain outline
   g.strokeStyle = css('--muted'); g.lineWidth = 1; g.setLineDash([4, 3]); g.strokeRect(x0 + .5, y0 + .5, Wp - 1, Hp - 1); g.setLineDash([]);
   drawFeatures(g);
+  drawHoles(g);
   drawDims(g);
   if (drag && drag.preview) drawPreview(g);
   drawLegend();
@@ -443,6 +501,32 @@ function drawFeatures(g) {
     g.restore();
   }
 }
+function drawHoles(g) {
+  const accent = css('--accent'), load = css('--load'), ink = css('--ink'), muted = css('--muted');
+  const multiLC = numCases() > 1;
+  for (const f of S.features) if (f.type === 'hole') {
+    const [cx, cy] = P(f.x, f.y), rh = BOTS(f).hole / 2 * view.s, rr = ringR(f) * view.s;
+    g.save();
+    g.setLineDash([3, 3]); g.strokeStyle = muted; g.lineWidth = 1; g.beginPath(); g.arc(cx, cy, rr, 0, Math.PI * 2); g.stroke(); g.setLineDash([]);
+    g.fillStyle = css('--paper'); g.strokeStyle = f.role === 'support' ? accent : f.role === 'load' ? load : ink; g.lineWidth = 2;
+    g.beginPath(); g.arc(cx, cy, Math.max(rh, 3), 0, Math.PI * 2); g.fill(); g.stroke();
+    if (f.role === 'support') { g.beginPath(); g.moveTo(cx - rh * 0.7, cy); g.lineTo(cx + rh * 0.7, cy); g.moveTo(cx, cy - rh * 0.7); g.lineTo(cx, cy + rh * 0.7); g.lineWidth = 1.5; g.stroke(); }
+    g.font = `600 11px ${css('--font-mono')}`; g.fillStyle = g.strokeStyle; g.textAlign = 'center'; g.textBaseline = 'top';
+    g.fillText(f.bolt, cx, cy + rr + 3);
+    if (f.role === 'load') {
+      const mag = Math.hypot(f.fx, f.fy) || 1, ux = f.fx / mag, uy = -f.fy / mag, L = 44 + rr;
+      if (multiLC && caseOf(f) !== S.lc) { g.globalAlpha = 0.4; g.setLineDash([5, 3]); }
+      g.strokeStyle = load; g.fillStyle = load; g.lineWidth = 2.5;
+      g.beginPath(); g.moveTo(cx - ux * L, cy - uy * L); g.lineTo(cx - ux * 8, cy - uy * 8); g.stroke(); g.setLineDash([]);
+      g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx - ux * 11 - uy * 5, cy - uy * 11 + ux * 5); g.lineTo(cx - ux * 11 + uy * 5, cy - uy * 11 - ux * 5); g.closePath(); g.fill();
+      const label = (multiLC ? `C${caseOf(f)} ` : '') + (mag >= 1000 ? fmt(mag / 1000, 2) + ' kN' : fmt(mag, 0) + ' N');
+      g.font = `600 12px ${css('--font-mono')}`; g.textBaseline = 'middle'; const tw = g.measureText(label).width / 2 + 4;
+      g.fillText(label, Math.max(tw, Math.min(view.cw - tw, cx - ux * (L + 14))), cy - uy * (L + 12));
+    }
+    g.restore();
+  }
+}
+const BOTS = (f) => BOLTS[f.bolt] || BOLTS.M8;
 function drawDims(g) {
   const muted = css('--muted'); g.save(); g.strokeStyle = muted; g.fillStyle = muted; g.lineWidth = 1;
   g.font = `12px ${css('--font-mono')}`; g.textAlign = 'center'; g.textBaseline = 'top';
@@ -510,6 +594,12 @@ stage.addEventListener('pointerup', (ev) => {
     if (d.moved) ang = Math.round(Math.atan2(d.y1 - d.y0, d.x1 - d.x0) / (Math.PI / 12)) * (Math.PI / 12);
     const fx = Math.round(S.loadMag * Math.cos(ang)), fy = Math.round(S.loadMag * Math.sin(ang));
     S.features.push({ type: 'load', lc: S.lc, x: snap(d.x0), y: snap(d.y0), fx, fy });
+  } else if (S.tool === 'hole') {
+    const f = { type: 'hole', role: S.holeRole, bolt: S.holeBolt, x: snap(d.x0), y: snap(d.y0) };
+    if (S.holeRole === 'load') { let ang = S.loadAng * Math.PI / 180;
+      if (d.moved) ang = Math.round(Math.atan2(d.y1 - d.y0, d.x1 - d.x0) / (Math.PI / 12)) * (Math.PI / 12);
+      Object.assign(f, { lc: S.lc, fx: Math.round(S.loadMag * Math.cos(ang)), fy: Math.round(S.loadMag * Math.sin(ang)) }); }
+    S.features.push(f);
   } else if (S.tool === 'support') {
     S.features.push({ type: 'fix', dof: S.supType, x0: snap(d.x0), y0: snap(d.y0), x1: snap(d.x1), y1: snap(d.y1) });
   } else if (S.tool === 'void' || S.tool === 'solid') {
@@ -532,6 +622,7 @@ function eraseAt(x, y) {
   for (let i = S.features.length - 1; i >= 0; i--) {
     const f = S.features[i]; let hit = false;
     if (f.type === 'load') hit = Math.hypot(f.x - x, f.y - y) < tol * 1.5;
+    else if (f.type === 'hole') hit = Math.hypot(f.x - x, f.y - y) <= ringR(f) + tol;
     else if (f.shape === 'circle') hit = Math.hypot(f.cx - x, f.cy - y) <= f.r + tol;
     else hit = x >= Math.min(f.x0, f.x1) - tol && x <= Math.max(f.x0, f.x1) + tol && y >= Math.min(f.y0, f.y1) - tol && y <= Math.max(f.y0, f.y1) + tol;
     if (hit) { S.features.splice(i, 1); return true; }
@@ -540,12 +631,17 @@ function eraseAt(x, y) {
 }
 function toolTip() {
   return { support: 'Drag along an edge to hold it. Tap for a single bolt point.', load: `Tap to place a ${fmt(S.loadMag, 0)} N load at ${fmt(S.loadAng, 0)}° (set size and direction above), or drag from the point to aim it. Fine-tune Fx and Fy in the list below.`,
+    hole: `Tap to place an ${S.holeBolt} ${S.holeRole === 'support' ? 'support bolt' : S.holeRole === 'load' ? `load pin carrying ${fmt(S.loadMag, 0)} N at ${fmt(S.loadAng, 0)}° (drag to aim)` : 'hole with no load'}. The tool keeps a ring of material 1.5 d around it.`,
     void: 'Drag to mark a zone that must stay empty (clearance, other parts).', solid: 'Drag to mark material that must stay (flanges, mounting faces).', erase: 'Tap a support, load or zone to remove it.' }[S.tool];
 }
-function setTool(t) { S.tool = t; document.querySelectorAll('#tools button').forEach(b => b.setAttribute('aria-pressed', b.dataset.tool === t)); $('suptype').style.display = t === 'support' ? '' : 'none'; $('voidshape').style.display = t === 'void' ? '' : 'none'; $('loadctl').style.display = t === 'load' ? '' : 'none'; $('tip').textContent = toolTip(); }
+function setTool(t) { S.tool = t; document.querySelectorAll('#tools button').forEach(b => b.setAttribute('aria-pressed', b.dataset.tool === t)); $('suptype').style.display = t === 'support' ? '' : 'none'; $('voidshape').style.display = t === 'void' ? '' : 'none'; $('loadctl').style.display = (t === 'load' || (t === 'hole' && S.holeRole === 'load')) ? '' : 'none'; $('holectl').style.display = t === 'hole' ? '' : 'none'; $('tip').textContent = toolTip(); }
 document.querySelectorAll('#tools button').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
 document.querySelectorAll('#views button').forEach(b => b.addEventListener('click', () => { S.view = b.dataset.view; document.querySelectorAll('#views button').forEach(c => c.setAttribute('aria-pressed', c === b)); draw(); }));
 $('suptype').addEventListener('change', e => S.supType = e.target.value);
+$('holebolt').innerHTML = Object.keys(BOLTS).map(b => `<option value="${b}">${b} (hole Ø${BOLTS[b].hole})</option>`).join('');
+$('holebolt').value = S.holeBolt;
+$('holebolt').addEventListener('change', e => { S.holeBolt = e.target.value; $('tip').textContent = toolTip(); });
+$('holerole').addEventListener('change', e => { S.holeRole = e.target.value; setTool('hole'); });
 $('lmag').addEventListener('change', e => { S.loadMag = Math.max(1, Math.abs(+e.target.value) || 1000); e.target.value = S.loadMag; $('tip').textContent = toolTip(); });
 $('lang').addEventListener('change', e => { S.loadAng = ((+e.target.value || 0) % 360 + 360) % 360; e.target.value = S.loadAng; $('tip').textContent = toolTip(); });
 function renderCases() { const sel = $('lcsel'), n = numCases(); if (S.lc > n) S.lc = n;
@@ -556,7 +652,7 @@ $('voidshape').addEventListener('change', e => S.voidShape = e.target.value);
 
 function renderFeats() {
   const box = $('feats'); box.innerHTML = '';
-  let nl = 0, ns = 0, nv = 0, nk = 0;
+  let nl = 0, ns = 0, nv = 0, nk = 0, nh = 0;
   S.features.forEach((f, i) => {
     const row = document.createElement('div'); row.className = 'feat';
     if (f.type === 'load') {
@@ -569,6 +665,22 @@ function renderFeats() {
       ns++; row.innerHTML = `<span class="tag sup">Support ${ns}</span><select id="st${i}" aria-label="Support type"><option value="xy">Fixed (bolted)</option><option value="y">Slides horizontally</option><option value="x">Slides vertically</option></select>
         <span class="mono">(${fmt(Math.min(f.x0, f.x1), 0)}, ${fmt(Math.min(f.y0, f.y1), 0)}) to (${fmt(Math.max(f.x0, f.x1), 0)}, ${fmt(Math.max(f.y0, f.y1), 0)}) mm</span>`;
       const s = row.querySelector('select'); s.value = f.dof; s.addEventListener('change', e => { snapshot(); f.dof = e.target.value; markDirty(); draw(); });
+    } else if (f.type === 'hole') {
+      nh = (nh || 0) + 1;
+      row.innerHTML = `<span class="tag ${f.role === 'load' ? 'load' : f.role === 'support' ? 'sup' : ''}">Hole ${nh}</span>
+        <select id="hr${i}" aria-label="Hole role"><option value="support">Support bolt</option><option value="load">Load pin</option><option value="free">Free hole</option></select>
+        <select id="hb${i}" aria-label="Bolt size">${Object.keys(BOLTS).map(b => `<option value="${b}">${b}</option>`).join('')}</select>
+        <span class="mono">at (${fmt(f.x, 1)}, ${fmt(f.y, 1)}) mm, Ø${BOTS(f).hole}</span>`
+        + (f.role === 'load' ? `<label>Case <select id="lcf${i}">${Array.from({ length: numCases() }, (_, k) => `<option value="${k + 1}"${caseOf(f) === k + 1 ? ' selected' : ''}>${k + 1}</option>`).join('')}</select></label>
+        <label>Fx <input type="number" step="50" id="fx${i}" value="${f.fx}"></label><label>Fy <input type="number" step="50" id="fy${i}" value="${f.fy}"></label><span class="hint">N</span>` : '');
+      const hr = row.querySelector(`#hr${i}`), hb = row.querySelector(`#hb${i}`); hr.value = f.role; hb.value = f.bolt;
+      hr.addEventListener('change', e => { snapshot(); f.role = e.target.value; if (f.role === 'load' && f.fx === undefined) Object.assign(f, { lc: S.lc, fx: 0, fy: -S.loadMag }); markDirty(); renderFeats(); draw(); });
+      hb.addEventListener('change', e => { snapshot(); f.bolt = e.target.value; markDirty(); renderFeats(); draw(); });
+      if (f.role === 'load') {
+        row.querySelector(`#lcf${i}`).addEventListener('change', e => { snapshot(); f.lc = +e.target.value; markDirty(); renderFeats(); draw(); });
+        row.querySelector(`#fx${i}`).addEventListener('change', e => { snapshot(); f.fx = +e.target.value || 0; markDirty(); renderFeats(); draw(); });
+        row.querySelector(`#fy${i}`).addEventListener('change', e => { snapshot(); f.fy = +e.target.value || 0; markDirty(); renderFeats(); draw(); });
+      }
     } else if (f.type === 'void') { nv++; row.innerHTML = `<span class="tag">Keep-out ${nv}</span><span class="mono">${f.shape === 'circle' ? `Ø${fmt(2 * f.r, 1)} at (${fmt(f.cx, 1)}, ${fmt(f.cy, 1)})` : `${fmt(Math.abs(f.x1 - f.x0), 1)} × ${fmt(Math.abs(f.y1 - f.y0), 1)}`} mm</span>`
         + (f.shape === 'circle' ? '' : `<label>Corner R <input type="number" min="0" step="1" id="rc${i}" value="${f.rc || 0}"></label><span class="hint">mm</span>`);
       const rcIn = row.querySelector(`#rc${i}`); if (rcIn) rcIn.addEventListener('change', e => { snapshot(); f.rc = Math.max(0, +e.target.value || 0); markDirty(); draw(); }); }
@@ -585,11 +697,11 @@ function persist() { try { localStorage.setItem('morphe.project.v1', projectJSON
 function symmetryIssue() {
   if (!S.sym) return '';
   const tol = Math.max(1, S.W / 100), W = S.W;
-  const key = f => f.type === 'load' ? [f.x, f.y, f.fx, f.fy] : f.shape === 'circle' ? [f.cx, f.cy, f.r] : [Math.min(f.x0, f.x1), Math.min(f.y0, f.y1), Math.max(f.x0, f.x1), Math.max(f.y0, f.y1)];
-  const mirror = f => f.type === 'load' ? [W - f.x, f.y, -f.fx, f.fy] : f.shape === 'circle' ? [W - f.cx, f.cy, f.r] : (() => { const k = key(f); return [W - k[2], k[1], W - k[0], k[3]]; })();
+  const key = f => f.type === 'hole' ? [f.x, f.y, f.fx || 0, f.fy || 0] : f.type === 'load' ? [f.x, f.y, f.fx, f.fy] : f.shape === 'circle' ? [f.cx, f.cy, f.r] : [Math.min(f.x0, f.x1), Math.min(f.y0, f.y1), Math.max(f.x0, f.x1), Math.max(f.y0, f.y1)];
+  const mirror = f => f.type === 'hole' ? [W - f.x, f.y, -(f.fx || 0), f.fy || 0] : f.type === 'load' ? [W - f.x, f.y, -f.fx, f.fy] : f.shape === 'circle' ? [W - f.cx, f.cy, f.r] : (() => { const k = key(f); return [W - k[2], k[1], W - k[0], k[3]]; })();
   for (const f of S.features) {
     const m = mirror(f);
-    const ok = S.features.some(g => g.type === f.type && (f.type !== 'load' || caseOf(g) === caseOf(f)) && (g.shape || '') === (f.shape || '') && key(g).every((v, i) => Math.abs(v - m[i]) <= (f.type === 'load' && i > 1 ? 1 : tol)));
+    const ok = S.features.some(g => g.type === f.type && (f.type !== 'hole' || (g.bolt === f.bolt && g.role === f.role)) && (!isLoad(f) || caseOf(g) === caseOf(f)) && (g.shape || '') === (f.shape || '') && key(g).every((v, i) => Math.abs(v - m[i]) <= (isLoad(f) && i > 1 ? 1 : tol)));
     if (!ok) return 'Mirror symmetry is on, but the supports, loads or zones are not mirror-symmetric. The designs will be symmetric anyway; turn symmetry off for an asymmetric load case.';
   }
   return '';
@@ -626,7 +738,8 @@ function updateCard(id) {
     + (R.ev.brokenLoads ? '<span class="chip bad">Load not carried</span>' : '') + (m.thinPct > 5 ? '<span class="chip warn">Thin webs</span>' : '') + (S.autoT && m.governs.startsWith('buckling') ? '<span class="chip warn">Buckling governs</span>' : '')
     + (m.as && m.as.outline ? '<span class="chip bad">Outline loses material</span>' : m.as && m.as.sharp ? '<span class="chip bad">Sharp junction</span>' : '')
     + (m.ver ? (m.converged ? '<span class="chip ok">Mesh-checked</span>' : m.as.outline || m.as.sharp ? '' : '<span class="chip warn">Mesh-sensitive</span>') : R.ver && R.ver.status === 'running' ? '<span class="chip">Checking mesh…</span>' : '')
-    + (m.hotWarn ? '<span class="chip warn">Hot spot at support</span>' : '');
+    + (m.hotWarn ? '<span class="chip warn">Hot spot at support</span>' : '')
+    + (m.holeChecks.some(c => !c.boltOK) ? '<span class="chip bad">Bolt too small</span>' : '');
 }
 function renderSummary() {
   const r = S.run; if (!r) return;
@@ -685,6 +798,8 @@ function renderDetail() {
     [`Deflection at load, at ${fmt(m.t, 1)} mm`, `${fmt(m.defl, 4)} mm${m.cn(m.src.dCase)}`],
     ['Max deflection anywhere', `${fmt(m.dmax, 4)} mm`],
     ['Stiffness at load', `${fmt(m.stiff / 1000, 2)} kN/mm`],
+    ...m.holeChecks.map(c => [`Hole ${c.idx}: ${c.f.bolt} ${c.f.role === 'support' ? 'support' : 'load'}, ${fmt(c.F / 1000, 2)} kN${m.cn(c.kc)}`,
+      `bearing ${fmt(c.F / (c.dh * m.t), 0)} MPa (FoS ${fmt(M.Sy * c.dh * m.t / c.F, 1)}) · bolt FoS <span style="color:${c.boltOK ? 'inherit' : 'var(--bad)'}">${fmt(c.nb, 1)}</span>${c.boltOK ? '' : ` → use ${c.need || 'a larger bolt'}`}`]),
     ['Through-holes', `${m.holes}`],
     ['Material below min width', `${fmt(m.thinPct, 1)} %`],
   ];
@@ -719,9 +834,14 @@ const sub = (b, s) => `${b}<sub>${s}</sub>`;
 function setupText() {
   const sup = { xy: 'fixed (bolted): u = v = 0', y: 'slides horizontally: v = 0', x: 'slides vertically: u = 0' };
   const fixes = S.features.filter(f => f.type === 'fix').map(f => `${sup[f.dof]} on (${fmt(Math.min(f.x0, f.x1), 1)}, ${fmt(Math.min(f.y0, f.y1), 1)}) to (${fmt(Math.max(f.x0, f.x1), 1)}, ${fmt(Math.max(f.y0, f.y1), 1)}) mm`);
-  const cases = [...new Set(S.features.filter(f => f.type === 'load').map(caseOf))].sort((a, b) => a - b);
-  const loads = cases.map(c => `Load case ${c}: ` + S.features.filter(f => f.type === 'load' && caseOf(f) === c).map(f => `Fx ${fmt(f.fx, 0)} N, Fy ${fmt(f.fy, 0)} N at (${fmt(f.x, 1)}, ${fmt(f.y, 1)}) mm`).join('; '));
-  const zones = S.features.filter(f => f.type === 'void' || f.type === 'solid').map(f => `${f.type === 'void' ? 'Keep-out' : 'Keep-solid'} ${f.shape === 'circle' ? `circle Ø${fmt(2 * f.r, 1)} at (${fmt(f.cx, 1)}, ${fmt(f.cy, 1)})` : `rectangle (${fmt(Math.min(f.x0, f.x1), 1)}, ${fmt(Math.min(f.y0, f.y1), 1)}) to (${fmt(Math.max(f.x0, f.x1), 1)}, ${fmt(Math.max(f.y0, f.y1), 1)})${f.rc ? `, corner R ${fmt(f.rc, 1)}` : ''}`} mm`);
+  const cases = [...new Set(S.features.filter(isLoad).map(caseOf))].sort((a, b) => a - b);
+  const loads = cases.filter(c => S.features.some(f => f.type === 'load' && caseOf(f) === c)).map(c => `Load case ${c}: ` + S.features.filter(f => f.type === 'load' && caseOf(f) === c).map(f => `Fx ${fmt(f.fx, 0)} N, Fy ${fmt(f.fy, 0)} N at (${fmt(f.x, 1)}, ${fmt(f.y, 1)}) mm`).join('; '));
+  for (const f of S.features.filter(f => f.type === 'hole' && f.role === 'support')) fixes.push(`${f.bolt} bolt in a Ø${BOTS(f).hole} hole at (${fmt(f.x, 1)}, ${fmt(f.y, 1)}) mm: hole edge held (u = v = 0)`);
+  for (const c of cases) { const hl = S.features.filter(f => f.type === 'hole' && f.role === 'load' && caseOf(f) === c); if (hl.length) {
+    const txt = hl.map(f => `pin load Fx ${fmt(f.fx, 0)} N, Fy ${fmt(f.fy, 0)} N in the Ø${BOTS(f).hole} hole at (${fmt(f.x, 1)}, ${fmt(f.y, 1)}) mm (bearing on the side the pin pushes)`).join('; ');
+    const j = loads.findIndex(l => l.startsWith(`Load case ${c}:`)); if (j >= 0) loads[j] += '; ' + txt; else loads.push(`Load case ${c}: ${txt}`); } }
+  const holesFree = S.features.filter(f => f.type === 'hole' && f.role === 'free').map(f => `free Ø${BOTS(f).hole} hole at (${fmt(f.x, 1)}, ${fmt(f.y, 1)}) mm`);
+  const zones = [...holesFree, ...S.features.filter(f => f.type === 'void' || f.type === 'solid').map(f => `${f.type === 'void' ? 'Keep-out' : 'Keep-solid'} ${f.shape === 'circle' ? `circle Ø${fmt(2 * f.r, 1)} at (${fmt(f.cx, 1)}, ${fmt(f.cy, 1)})` : `rectangle (${fmt(Math.min(f.x0, f.x1), 1)}, ${fmt(Math.min(f.y0, f.y1), 1)}) to (${fmt(Math.max(f.x0, f.x1), 1)}, ${fmt(Math.max(f.y0, f.y1), 1)})${f.rc ? `, corner R ${fmt(f.rc, 1)}` : ''}`} mm`)];
   return { fixes, loads, zones };
 }
 function peakXY(R) { const d = S.lastDisc, L = R.ver && R.ver.levels, xy = (L && L[L.length - 1].xy) || R.ev.awayXY; return xy ? [xy[0], d.H - xy[1]] : null; }
@@ -760,7 +880,12 @@ function renderCalc(R, m) {
     `t${sub('', 'σ')} = σ${sub('', '1')} · FoS / S${sub('', 'y')} = ${n(sh, 1)} × ${n(S.fos)} / ${n(M.Sy, 0)} = <b>${n(tS)}</b> mm<br>`
     + (S.dlim > 0 ? `t${sub('', 'δ')} = δ${sub('', '1')} / (E δ${sub('', 'allow')}) = ${n(dh, 0)} / (${n(M.E, 0)} × ${n(S.dlim, 3)}) = <b>${n(tD)}</b> mm<br>` : `t${sub('', 'δ')}: no deflection limit set<br>`)
     + (isFinite(lh) ? `t${sub('', 'b')} = (λ${sub('', 'req')} / (λ${sub('', '1')} E))<sup>1/3</sup> = (${n(S.bfs, 1)} / (${lh.toExponential(3)} × ${n(M.E, 0)}))<sup>1/3</sup> = <b>${n(tB)}</b> mm<br>` : `t${sub('', 'b')}: no buckling (no compression)<br>`)
+    + (m.tBr > 0 ? `t${sub('', 'br')} = <b>${n(m.tBr)}</b> mm (bearing, see below)<br>` : '')
     + (S.autoT ? `t = gauge↑(max) = <b>${n(t, 1)}</b> mm (set by ${m.governs})` : `t = ${n(t, 1)} mm (your fixed value)`));
+  if (m.holeChecks.length) { const c = m.holeChecks.reduce((a, b) => b.tBr > a.tBr ? b : a);
+    h += eq('Bolt holes: plate bearing and bolt shear', `σ${sub('', 'br')} = F / (d t), &nbsp; t${sub('', 'br')} = F · FoS / (d S${sub('', 'y')}) = ${n(c.F, 0)} × ${n(S.fos)} / (${n(c.dh, 1)} × ${n(M.Sy, 0)}) = <b>${n(c.tBr)}</b> mm (hole ${c.idx})<br>
+      τ${sub('', 'bolt')} = F / A${sub('', 's')}, &nbsp; FoS${sub('', 'bolt')} = 0.577 S${sub('', 'y,bolt')} / τ = 0.577 × ${boltSy(c.f.bolt)} / (${n(c.F, 0)} / ${n(BOLTS[c.f.bolt].As, 1)}) = <b>${n(c.nb, 1)}</b> (${c.f.bolt}, class 8.8, shear through the threads)<br>
+      Support holes carry the reaction found by the analysis; a load hole carries its load as cosine pressure on the side the pin pushes against.`); }
   h += eq(`11 · Results at t = ${fmt(t, 1)} mm`, `σ = ${n(sh, 1)} / ${n(t, 1)} = ${n(m.sig, 1)} MPa → FoS = ${n(M.Sy, 0)} / ${n(m.sig, 1)} = <b>${n(m.fos)}</b><br>δ = ${n(dh, 0)} / (${n(M.E, 0)} × ${n(t, 1)}) = <b>${n(m.defl, 4)}</b> mm${isFinite(lh) ? `<br>λ = ${lh.toExponential(3)} × ${n(M.E, 0)} × ${n(t, 1)}³ = <b>${n(m.blf)}</b>` : ''}<br>mass = ρ A t = ${n(M.rho, 0)} kg/m³ × ${n(m.area, 0)} mm² × ${n(t, 1)} mm = <b>${n(m.mass, 1)}</b> g`);
   h += `<p class="hint">Why added load may not change the reported deflection: the thickness is re-sized for every setup, so extra load makes the plate thicker, which brings stress and deflection back down. To see the effect of a load at constant thickness, untick "Size plate thickness" and set the thickness.</p>`;
   box.innerHTML = h;
@@ -925,7 +1050,11 @@ function simplify(pts, tol) {
     if (md > tol) { keep[mi] = 1; st.push([a, mi], [mi, b]); } }
   return pts.filter((_, i) => keep[i]);
 }
+function holeCircles() { const d = S.lastDisc; return (d && d.holes ? d.holes : []).map(H => ({ x: H.f.x, y: H.f.y, r: H.rh })); }
+function withoutHoleLoops(loops) { const d = S.lastDisc, hc = holeCircles();
+  return loops.filter(lp => !hc.some(c => lp.every(([x, y]) => Math.hypot(x - c.x, y - c.y) <= c.r + 1.6 * d.h))); }
 function makeDXF(loops) {
+  loops = withoutHoleLoops(loops);
   const L = ['0', 'SECTION', '2', 'HEADER', '9', '$INSUNITS', '70', '4', '9', '$EXTMIN', '10', '0', '20', '0', '9', '$EXTMAX', '10', String(S.lastDisc.W), '20', String(S.lastDisc.H), '0', 'ENDSEC',
     '0', 'SECTION', '2', 'TABLES', '0', 'TABLE', '2', 'LAYER', '70', '1', '0', 'LAYER', '2', 'PROFILE', '70', '0', '62', '7', '6', 'CONTINUOUS', '0', 'ENDTAB', '0', 'ENDSEC',
     '0', 'SECTION', '2', 'ENTITIES'];
@@ -934,12 +1063,15 @@ function makeDXF(loops) {
     for (const [x, y] of lp) L.push('0', 'VERTEX', '8', 'PROFILE', '10', x.toFixed(4), '20', y.toFixed(4));
     L.push('0', 'SEQEND', '8', 'PROFILE');
   }
+  for (const c of holeCircles()) L.push('0', 'CIRCLE', '8', 'HOLES', '10', c.x.toFixed(4), '20', c.y.toFixed(4), '40', c.r.toFixed(4));
   L.push('0', 'ENDSEC', '0', 'EOF');
   return L.join('\r\n') + '\r\n';
 }
 function makeSVG(loops, m) {
   const W = S.lastDisc.W, H = S.lastDisc.H;
-  const d = loops.map(lp => 'M' + lp.map(([x, y]) => `${x.toFixed(3)} ${(H - y).toFixed(3)}`).join(' L') + ' Z').join(' ');
+  loops = withoutHoleLoops(loops);
+  const circ = holeCircles().map(c => `M${(c.x + c.r).toFixed(3)} ${(H - c.y).toFixed(3)} A${c.r} ${c.r} 0 1 0 ${(c.x - c.r).toFixed(3)} ${(H - c.y).toFixed(3)} A${c.r} ${c.r} 0 1 0 ${(c.x + c.r).toFixed(3)} ${(H - c.y).toFixed(3)} Z`).join(' ');
+  const d = (circ ? circ + ' ' : '') + loops.map(lp => 'M' + lp.map(([x, y]) => `${x.toFixed(3)} ${(H - y).toFixed(3)}`).join(' L') + ' Z').join(' ');
   return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${W}mm" height="${H}mm" viewBox="0 0 ${W} ${H}">\n<title>Morphe design ${S.selected}, ${m ? fmt(m.t, 1) + ' mm ' + MATERIALS[S.mat].name : ''}</title>\n<path d="${d}" fill="#000" fill-rule="evenodd"/>\n</svg>\n`;
 }
 function makeCSV() {
@@ -959,9 +1091,9 @@ function makeCSV() {
 }
 function loadProject(o, quiet) {
   if (!o || typeof o !== 'object' || !Array.isArray(o.features) || !(o.W >= 10) || !(o.H >= 10)) throw new Error('Not a Morphe project file.');
-  const ok = ['load', 'fix', 'void', 'solid'];
+  const ok = ['load', 'fix', 'void', 'solid', 'hole'];
   S.W = +o.W; S.H = +o.H; S.sym = !!o.symmetric;
-  S.features = o.features.filter(f => f && ok.includes(f.type)).map(f => ({ ...f }));
+  S.features = o.features.filter(f => f && ok.includes(f.type) && (f.type !== 'hole' || (BOLTS[f.bolt] && ['support', 'load', 'free'].includes(f.role)))).map(f => ({ ...f }));
   if (MATERIALS[o.material]) S.mat = o.material;
   if (PROCESSES[o.process]) S.proc = o.process;
   if (o.minWidth > 0) S.minW = +o.minWidth;
@@ -1067,7 +1199,7 @@ initInputs(); setTool('load');
 if (window.matchMedia && window.matchMedia('(max-width: 900px)').matches) $('setupBox').open = false;
 let restored = false;
 try { const saved = localStorage.getItem('morphe.project.v1'); if (saved) { loadProject(JSON.parse(saved), true); restored = true; } } catch (e) { restored = false; }
-if (!restored) applyPreset('cantilever', true);
+if (!restored) applyPreset('bolted', true);
 $('undo').disabled = true;
 S.dirty = false;
 startRun();
