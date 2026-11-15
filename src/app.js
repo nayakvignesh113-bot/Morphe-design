@@ -11,11 +11,11 @@ const MATERIALS = {
   pa12:   { name: 'Nylon PA12, SLS', E: 1700, nu: 0.40, Sy: 46, rho: 1010 },
 };
 const PROCESSES = {
-  laser:  { name: 'Laser / plasma cut plate', minW: 3, cut: true },
-  water:  { name: 'Waterjet cut plate', minW: 2.5, cut: true },
-  mill:   { name: 'CNC milled plate (Ø6 end mill)', minW: 6, cut: false },
-  fdm:    { name: 'FDM 3D print', minW: 2, cut: false },
-  am:     { name: 'SLS / metal additive', minW: 1.2, cut: false },
+  laser:  { name: 'Laser / plasma cut plate', minW: 3, rc: 1, cut: true },
+  water:  { name: 'Waterjet cut plate', minW: 2.5, rc: 1, cut: true },
+  mill:   { name: 'CNC milled plate (Ø6 end mill)', minW: 6, rc: 3, cut: false },
+  fdm:    { name: 'FDM 3D print', minW: 2, rc: 1, cut: false },
+  am:     { name: 'SLS / metal additive', minW: 1.2, rc: 1, cut: false },
   custom: { name: 'Custom minimum width', minW: null, cut: false },
 };
 // ISO 273 medium-series clearance holes; property class 8.8 bolt yield (ISO 898-1)
@@ -77,7 +77,7 @@ const PRESETS = {
 // ---------------- state ----------------
 const S = {
   preset: 'bolted', W: 160, H: 100, res: 'std', sym: false,
-  holeRole: 'support', holeBolt: 'M8', loadMag: 1000, loadAng: 270, lc: 1, nLC: 1, mat: 'al6061', proc: 'laser', minW: 3, fos: 2, bfs: 3, cyc: 'static', ffs: 1.5, dlim: 0, autoT: true, tFix: 5,
+  holeRole: 'support', holeBolt: 'M8', loadMag: 1000, loadAng: 270, lc: 1, nLC: 1, mat: 'al6061', proc: 'laser', minW: 3, rc: 0, outline: null, geoKey: 0, fos: 2, bfs: 3, cyc: 'static', ffs: 1.5, dlim: 0, autoT: true, tFix: 5,
   features: [], tool: 'load', supType: 'xy', voidShape: 'rect', view: 'shape',
   run: null, results: {}, selected: 'B', dirty: false, lastDisc: null,
 };
@@ -93,7 +93,7 @@ function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add
 function applyPreset(key, noSnap) {
   if (!noSnap) snapshot();
   const p = PRESETS[key]();
-  S.preset = key; S.W = p.W; S.H = p.H; S.sym = p.sym; S.features = p.features;
+  S.preset = key; S.W = p.W; S.H = p.H; S.sym = p.sym; S.features = p.features; S.outline = null; S.geoKey++;
   S.nLC = Math.max(1, ...p.features.filter(isLoad).map(f => f.lc || 1)); S.lc = 1;
   syncInputs(); markDirty(); draw();
 }
@@ -147,8 +147,18 @@ function discretize(opts = {}) {
     const [x, y] = center(ix, iy); if (Math.hypot(x - px, y - py) <= padR) passive[ix * nely + iy] = 2; }
   for (const f of S.features) if (f.type === 'void') for (let ix = 0; ix < nelx; ix++) for (let iy = 0; iy < nely; iy++) {
     const [x, y] = center(ix, iy); if (inside(f, x, y)) { const e = ix * nely + iy; if (passive[e] === 2) loadInVoid = true; passive[e] = 1; } }
+  const warnings = [];
+  // imported outline: cells whose centre lies outside the outline are void; supports, loads and holes must sit inside it
+  let outsideOutline = null;
+  if (S.outline) {
+    const cov = Geom.coverage(S.outline.loops, S.W, S.H, nelx, nely); outsideOutline = new Uint8Array(nel);
+    for (let e = 0; e < nel; e++) if (cov[e] <= 0.5) { outsideOutline[e] = 1; if (passive[e] === 2) loadInVoid = true; passive[e] = 1; }
+    const probe = (x, y, what) => { if (Geom.signedDist(S.outline.loops, x, y) < -0.75 * h) warnings.push(`${what} lies outside the imported outline.`); };
+    S.features.forEach((f, i) => { if (f.type === 'load' || f.type === 'hole') probe(f.x, f.y, f.type === 'hole' ? `Bolt hole at (${fmt(f.x, 1)}, ${fmt(f.y, 1)})` : `Load at (${fmt(f.x, 1)}, ${fmt(f.y, 1)})`);
+      if (f.type === 'fix') probe((f.x0 + f.x1) / 2, (f.y0 + f.y1) / 2, `Support at (${fmt((f.x0 + f.x1) / 2, 1)}, ${fmt((f.y0 + f.y1) / 2, 1)})`); });
+  }
   // bolt holes: clearance hole (void) inside a ring of material (edge distance 1.5 d); exact geometry kept in the mesh check
-  const holePassive = new Int8Array(nel), holeOf = new Int16Array(nel).fill(-1), holes = [], warnings = [], ignore = new Uint8Array(nel);
+  const holePassive = new Int8Array(nel), holeOf = new Int16Array(nel).fill(-1), holes = [], ignore = new Uint8Array(nel);
   const bcMask = new Uint8Array(nn);
   S.features.forEach((f, fi) => { if (f.type !== 'hole') return;
     const rh = BOLTS[f.bolt].hole / 2, rr = ringR(f);
@@ -235,7 +245,39 @@ function onWorker(m) {
 let vpool = [];
 const VERIFY_MAX_EL = 30000;   // finest mesh-check level (stress and deflection only)
 const EXCL = 3;                // hot-spot zone around supports and loads, in optimizer elements (from the convergence study)
+// Hi-res geometry layer: the optimised layout is resampled to a pixel grid GEO_F x finer than the optimiser grid, clipped to the imported outline
+// (exact area coverage) and closed with the minimum inner corner radius. Verification, exports and area read this one field.
+const GEO_F = 6;
+const rcUse = () => (S.rc > 0 ? Math.max(S.rc, 1.0) : 0);   // below 1 mm the analysis cannot resolve a fillet
+function geoActive() { return !!(S.outline || rcUse() > 0); }
+function buildGeo(R, d0) {
+  const PX = GEO_F * d0.nelx, PY = GEO_F * d0.nely, hs = d0.hx / GEO_F, hsy = d0.hy / GEO_F;
+  const F = sampleFieldRaw(R, d0, { nelx: PX, nely: PY, hx: hs, hy: hsy });
+  const cov = S.outline ? Geom.coverage(S.outline.loops, d0.W, d0.H, PX, PY) : null;
+  if (cov) for (let i = 0; i < F.length; i++) if (cov[i] < F[i]) F[i] = cov[i];
+  let added = 0;
+  const rc = rcUse();
+  if (rc > 0) {
+    const sol = new Uint8Array(F.length); for (let i = 0; i < F.length; i++) sol[i] = F[i] > 0.5 ? 1 : 0;
+    const add = Geom.closingAdded(sol, PX, PY, hs, hsy, rc + 2 * Math.max(hs, hsy));
+    for (let i = 0; i < F.length; i++) if (add[i] && !(cov && cov[i] < 0.5)) { F[i] = cov ? cov[i] : 1; added++; }   // never add material outside the imported plate; its own corners are kept as drawn
+  }
+  let sum = 0; for (let i = 0; i < F.length; i++) sum += F[i];
+  return { F, PX, PY, area: sum * hs * hsy, added, hs, hsy };
+}
+const geoOf = (R) => { if (!geoActive()) return null; if (!R.geo || R.geoKey !== S.geoKey) { R.geo = buildGeo(R, S.lastDisc); R.geoKey = S.geoKey; } return R.geo; };
+// block-average the hi-res field onto a grid nx x ny (nx, ny divide the pixel grid)
+function geoBlock(G, nx, ny) {
+  const kx = G.PX / nx, ky = G.PY / ny, out = new Float32Array(nx * ny);
+  for (let ix = 0; ix < nx; ix++) for (let iy = 0; iy < ny; iy++) { let s = 0; for (let a = 0; a < kx; a++) for (let c = 0; c < ky; c++) s += G.F[(ix * kx + a) * G.PY + iy * ky + c]; out[ix * ny + iy] = s / (kx * ky); }
+  return out;
+}
 function sampleField(R, d0, d) {
+  const G = geoOf(R);
+  if (G && d.nelx * GEO_F % d0.nelx === 0 && GEO_F * d0.nelx % d.nelx === 0 && GEO_F * d0.nely % d.nely === 0) return Float64Array.from(geoBlock(G, d.nelx, d.nely));
+  return sampleFieldRaw(R, d0, d);
+}
+function sampleFieldRaw(R, d0, d) {
   const nx = d0.nelx, ny = d0.nely, sol = R.ev.solid, b = new Float32Array(nx * ny);
   for (let ix = 0; ix < nx; ix++) for (let iy = 0; iy < ny; iy++) {
     let s = 0, n = 0; for (let a = -1; a <= 1; a++) for (let c = -1; c <= 1; c++) { const jx = ix + a, jy = iy + c; if (jx >= 0 && jy >= 0 && jx < nx && jy < ny) { const w = a === 0 && c === 0 ? 4 : 1; s += sol[jx * ny + jy] * w; n += w; } }
@@ -333,7 +375,7 @@ function metrics(R) {
   if (!R || !R.ev || !S.lastDisc) return null;
   const d = S.lastDisc, M = MATERIALS[S.mat], ev = R.ev, ver = verified(R);
   const as = ver ? assess(ver) : null, src = as ? as.src : levelOf(ev, 'opt', d.nel);
-  const area = ev.nSolid * d.hx * d.hy;
+  const G = geoOf(R), area = G ? G.area : ev.nSolid * d.hx * d.hy;
   const tS = src.vmAway * S.fos / M.Sy;
   const tD = S.dlim > 0 ? src.dLoad / (M.E * S.dlim) : 0;
   const lamHat = src.lamB, tB = isFinite(lamHat) && lamHat > 0 ? Math.cbrt(S.bfs / (lamHat * M.E)) : 0;
@@ -454,6 +496,7 @@ function draw() {
   }
   // domain outline
   g.strokeStyle = css('--muted'); g.lineWidth = 1; g.setLineDash([4, 3]); g.strokeRect(x0 + .5, y0 + .5, Wp - 1, Hp - 1); g.setLineDash([]);
+  drawOutline(g, x0, y0);
   drawFeatures(g);
   drawHoles(g);
   drawDims(g);
@@ -461,6 +504,13 @@ function draw() {
   drawLegend();
 }
 
+function drawOutline(g, x0, y0) {
+  if (!S.outline) return;
+  g.save(); const path = new Path2D();
+  for (const l of S.outline.loops) { l.forEach(([x, y], i) => { const [px, py] = P(x, y); i ? path.lineTo(px, py) : path.moveTo(px, py); }); path.closePath(); }
+  g.fillStyle = css('--accent'); g.globalAlpha = 0.07; g.fill(path, 'evenodd'); g.globalAlpha = 1;
+  g.strokeStyle = css('--ink'); g.lineWidth = 1.5; g.stroke(path); g.restore();
+}
 function hatch(g, color) {
   const c = document.createElement('canvas'); c.width = c.height = 8; const h = c.getContext('2d');
   h.strokeStyle = color; h.lineWidth = 1; h.beginPath(); h.moveTo(0, 8); h.lineTo(8, 0); h.stroke();
@@ -705,8 +755,8 @@ function renderFeats() {
   });
 }
 const undoStack = [];
-function snapshot() { undoStack.push(JSON.stringify({ W: S.W, H: S.H, sym: S.sym, features: S.features })); if (undoStack.length > 60) undoStack.shift(); $('undo').disabled = false; }
-function undo() { const st = undoStack.pop(); if (!st) return; const o = JSON.parse(st); Object.assign(S, o); $('undo').disabled = !undoStack.length; syncInputs(); markDirty(); draw(); }
+function snapshot() { undoStack.push(JSON.stringify({ W: S.W, H: S.H, sym: S.sym, features: S.features, outline: S.outline, rc: S.rc })); if (undoStack.length > 60) undoStack.shift(); $('undo').disabled = false; }
+function undo() { const st = undoStack.pop(); if (!st) return; const o = JSON.parse(st); Object.assign(S, { outline: null, rc: 0 }, o); S.geoKey++; $('undo').disabled = !undoStack.length; syncInputs(); markDirty(); draw(); }
 function persist() { try { localStorage.setItem('morphe.project.v1', projectJSON()); } catch (e) { /* storage unavailable */ } }
 function symmetryIssue() {
   if (!S.sym) return '';
@@ -979,7 +1029,9 @@ function renderAll() {
 // ---------------- geometry export ----------------
 // Marching-squares setup shared by the outline (DXF/SVG) and the solid (STL) exports.
 function msField(R) {
-  const d = S.lastDisc, nelx = d.nelx, nely = d.nely, sol = R.ev.solid;
+  let d = S.lastDisc, nelx = d.nelx, nely = d.nely, sol = R.ev.solid;
+  const G = geoOf(R);
+  if (G) { nelx = 2 * d.nelx; nely = 2 * d.nely; sol = geoBlock(G, nelx, nely); d = { ...d, nelx, nely, hx: d.W / nelx, hy: d.H / nely, h: (d.W / nelx + d.H / nely) / 2 }; }
   // light 3x3 blur of the 0/1 layout, then nodal averages, then iso-level 0.5
   const b = new Float32Array(nelx * nely);
   for (let ix = 0; ix < nelx; ix++) for (let iy = 0; iy < nely; iy++) {
@@ -1125,6 +1177,11 @@ function loadProject(o, quiet) {
   if (MATERIALS[o.material]) S.mat = o.material;
   if (PROCESSES[o.process]) S.proc = o.process;
   if (o.minWidth > 0) S.minW = +o.minWidth;
+  S.rc = o.minInnerRadius > 0 ? +o.minInnerRadius : 0; S.outline = null; S.geoKey++;
+  if (o.outline && Array.isArray(o.outline.loops)) {
+    const pr = Geom.prepare(o.outline.loops.map(l => l.map(p => [+p[0], +p[1]])).filter(l => Array.isArray(l) && l.length >= 3), 0);
+    if (!pr.errors.length) S.outline = { name: String(o.outline.name || 'imported outline'), loops: pr.loops };
+  }
   S.nLC = Math.max(1, +o.loadCases || 1, ...S.features.filter(f => f.type === 'load').map(caseOf)); S.lc = 1;
   if (o.fos >= 1) S.fos = +o.fos;
   if (o.bucklingFactor >= 1) S.bfs = +o.bucklingFactor;
@@ -1150,7 +1207,7 @@ function handoffJSON(R, m) {
       stiffness_N_per_mm: r4(m.stiff), thicknessSetBy: m.governs, bolts: m.holeChecks.map(c => ({ hole: c.idx, bolt: c.f.bolt, force: r4(c.F), bearingStress: r4(c.F / (c.dh * m.t)), boltShearFactor: r4(c.nb) })) },
     description: st }, null, 1);
 }
-function projectJSON() { return JSON.stringify({ tool: 'Morphe Design Studio', version: 2, loadCases: numCases(), preset: S.preset, mesh: S.res, autoThickness: S.autoT, thickness: S.tFix, W: S.W, H: S.H, material: S.mat, process: S.proc, minWidth: S.minW, fos: S.fos, bucklingFactor: S.bfs, loading: S.cyc, fatigueFactor: S.ffs, deflLimit: S.dlim, symmetric: S.sym, features: S.features }, null, 2); }
+function projectJSON() { return JSON.stringify({ tool: 'Morphe Design Studio', version: 2, loadCases: numCases(), preset: S.preset, mesh: S.res, autoThickness: S.autoT, thickness: S.tFix, W: S.W, H: S.H, material: S.mat, process: S.proc, minWidth: S.minW, fos: S.fos, bucklingFactor: S.bfs, loading: S.cyc, fatigueFactor: S.ffs, deflLimit: S.dlim, symmetric: S.sym, minInnerRadius: S.rc, outline: S.outline, features: S.features }, null, 2); }
 
 // zip (stored, no compression)
 const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
@@ -1208,12 +1265,36 @@ $('exCopy').addEventListener('click', async () => { const R = ready(); if (!R) r
 function syncInputs() {
   $('preset').value = S.preset; $('W').value = S.W; $('H').value = S.H; $('res').value = S.res; $('sym').checked = S.sym;
   $('lmag').value = S.loadMag; $('lang').value = S.loadAng;
-  $('mat').value = S.mat; $('proc').value = S.proc; $('minw').value = S.minW; $('fos').value = S.fos; $('bfs').value = S.bfs; $('cyc').value = S.cyc; $('ffs').value = S.ffs; $('ffs').disabled = S.cyc === 'static'; $('dlim').value = S.dlim;
+  $('mat').value = S.mat; $('proc').value = S.proc; $('minw').value = S.minW; $('rc').value = S.rc; $('impClear').disabled = !S.outline; $('fos').value = S.fos; $('bfs').value = S.bfs; $('cyc').value = S.cyc; $('ffs').value = S.ffs; $('ffs').disabled = S.cyc === 'static'; $('dlim').value = S.dlim;
   $('autot').checked = S.autoT; $('tfix').value = S.tFix; $('tfix').disabled = S.autoT;
+  $('impInfo').textContent = S.outline ? `${S.outline.name}: ${S.outline.loops.length} loop${S.outline.loops.length > 1 ? 's' : ''}, ${fmt(Math.abs(Geom.polyArea(S.outline.loops[0])), 0)} mm\u00b2 outer loop. Design space ${fmt(S.W, 1)} \u00d7 ${fmt(S.H, 1)} mm.` : 'Optional. Closed loops become the plate: the outer loop is the edge, inner loops are cut-outs. Then place supports and loads on it.';
   $('thint').textContent = S.autoT ? 'Thickness is picked per design so each one just meets the requirements.' : 'Every design is checked at this thickness.';
   if ($('lcsel')) renderCases();
   $('setupSum').textContent = `${S.W} × ${S.H} mm · ${MATERIALS[S.mat].name} · FoS ${S.fos} · buckling ≥ ${S.bfs}`;
   renderFeats();
+}
+// ---------------- outline import ----------------
+const UNIT_MM = { mm: 1, cm: 10, in: 25.4, ft: 304.8, m: 1000, px: 25.4 / 96 };
+function importOutline(text, name) {
+  const isSvg = /\.svg$/i.test(name) || /<svg\b/i.test(text.slice(0, 2000));
+  const P = isSvg ? Geom.parseSVG(text) : Geom.parseDXF(text);
+  const pick = $('impUnit').value;
+  const unit = pick !== 'auto' ? pick : isSvg ? (P.units === 'mm' ? 'mm' : 'px') : (P.units && UNIT_MM[P.units] ? P.units : 'mm');
+  // an SVG with a physical width/viewBox arrives in mm already; only an explicit pick rescales it
+  const sc = isSvg && P.units === 'mm' && pick === 'auto' ? 1 : UNIT_MM[unit];
+  const ch = Geom.chain(P.pieces, sc);
+  const pr = Geom.prepare(ch.loops, 0.005);
+  const msgs = [...P.warn, ...ch.warn];
+  if (pr.errors.length) { showBanner([...pr.errors, ...msgs].join(' '), true); return; }
+  const b = Geom.bbox(pr.loops), w = b.x1 - b.x0, h = b.y1 - b.y0;
+  if (w < 10 || h < 10 || w > 5000 || h > 5000) { showBanner(`The outline measures ${fmt(w, 1)} × ${fmt(h, 1)} mm, outside 10 to 5000 mm. Check the units picker next to the import button.`, true); return; }
+  snapshot();
+  const loops = pr.loops.map(l => l.map(([x, y]) => [x - b.x0, y - b.y0]));
+  S.outline = { name: name.replace(/\.[^.]+$/, ''), loops }; S.W = +w.toFixed(3); S.H = +h.toFixed(3); S.sym = false; S.geoKey++;
+  const kept = S.features.length; S.features = []; S.preset = 'blank'; S.nLC = 1; S.lc = 1; S.results = {}; S.run = null; S.lastDisc = null;
+  if ($('preset')) $('preset').value = 'blank';
+  syncInputs(); markDirty(); renderAll(); draw();
+  showBanner([`Imported ${loops.length} loop${loops.length > 1 ? 's' : ''}, ${fmt(w, 1)} × ${fmt(h, 1)} mm (${unit}). Now add supports and loads on the part${kept ? '; earlier features were cleared' : ''}.`, ...msgs].join(' '));
 }
 function initInputs() {
   $('mat').innerHTML = Object.entries(MATERIALS).map(([k, m]) => `<option value="${k}">${m.name} · E ${fmt(m.E / 1000, 1)} GPa · Sy ${m.Sy} MPa</option>`).join('');
@@ -1222,10 +1303,14 @@ function initInputs() {
   const geo = (id, key, f = Number) => $(id).addEventListener('change', e => { const v = f(e.target.value); if (key === 'W' || key === 'H') { if (!(v >= 10)) { syncInputs(); return; } } S[key] = v; markDirty(); syncInputs(); draw(); });
   geo('W', 'W'); geo('H', 'H'); geo('res', 'res', String);
   $('sym').addEventListener('change', e => { S.sym = e.target.checked; markDirty(); });
+  $('rc').addEventListener('change', e => { S.rc = Math.max(0, +e.target.value || 0); S.geoKey++; syncInputs(); markDirty(); });
+  $('impBtn').addEventListener('click', () => $('impFile').click());
+  $('impClear').addEventListener('click', () => { if (!S.outline) return; snapshot(); S.outline = null; S.geoKey++; syncInputs(); markDirty(); draw(); toast('Outline removed.'); });
+  $('impFile').addEventListener('change', async e => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; try { importOutline(await f.text(), f.name); } catch (err) { showBanner('Import failed: ' + (err.message || err), true); } });
   $('minw').addEventListener('change', e => { S.minW = Math.max(0.5, +e.target.value || 1); S.proc = 'custom'; syncInputs(); markDirty(); });
   $('proc').addEventListener('change', e => { S.proc = e.target.value; const p = PROCESSES[S.proc]; if (p.minW) S.minW = p.minW; syncInputs(); markDirty(); });
   const live = (id, key, f) => $(id).addEventListener('change', e => { S[key] = f(e.target); syncInputs(); renderAll(); });
-  ['mat', 'fos', 'bfs', 'cyc', 'ffs', 'dlim', 'autot', 'tfix', 'sym', 'proc', 'minw', 'res'].forEach(id => $(id).addEventListener('change', persist));
+  ['mat', 'fos', 'bfs', 'cyc', 'ffs', 'dlim', 'autot', 'tfix', 'sym', 'proc', 'minw', 'rc', 'res'].forEach(id => $(id).addEventListener('change', persist));
   live('mat', 'mat', t => t.value); live('fos', 'fos', t => Math.max(1, +t.value || 1)); live('bfs', 'bfs', t => Math.max(1, +t.value || 1)); live('cyc', 'cyc', t => t.value); live('ffs', 'ffs', t => Math.max(1, +t.value || 1)); live('dlim', 'dlim', t => Math.max(0, +t.value || 0));
   live('autot', 'autoT', t => t.checked); live('tfix', 'tFix', t => Math.max(0.5, +t.value || 1));
   $('go').addEventListener('click', startRun);

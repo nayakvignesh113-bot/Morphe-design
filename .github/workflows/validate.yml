@@ -8,5 +8,6 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '20' }
       - run: node tests/validate.js
+      - run: node tests/geom.js
       - name: index.html is up to date with src/
         run: python3 build.py && git diff --exit-code index.html

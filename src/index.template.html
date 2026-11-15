@@ -206,10 +206,18 @@ ol.steps li { margin-bottom: 10px; }
       <label class="check"><input id="sym" type="checkbox"> Mirror-symmetric about the vertical centre line</label>
     </div>
     <div class="group">
+      <h2>Outline import</h2>
+      <div class="wide" style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn" id="impBtn" title="Use a DXF or SVG outline as the design space">Import DXF / SVG</button><button class="btn" id="impClear" disabled>Remove outline</button>
+        <select id="impUnit" title="Units of the file" aria-label="Units of the imported file"><option value="auto">Units: auto</option><option value="mm">mm</option><option value="cm">cm</option><option value="in">inch</option><option value="m">m</option><option value="px">px (96 dpi)</option></select>
+        <input type="file" id="impFile" accept=".dxf,.svg,image/svg+xml" hidden></div>
+      <p class="hint" id="impInfo" style="margin:4px 0 0">Optional. Closed loops become the plate: the outer loop is the edge, inner loops are cut-outs. Then place supports and loads on it.</p>
+    </div>
+    <div class="group">
       <h2>Material and process</h2>
       <div class="wide"><label for="mat">Material</label><select id="mat"></select></div>
       <div class="wide"><label for="proc">Manufacturing</label><select id="proc"></select></div>
       <div class="field"><label for="minw">Min member width (mm)</label><input id="minw" type="number" min="0.5" step="0.5"></div>
+      <div class="field"><label for="rc" title="Every re-entrant corner and slot in the final outline is rounded to at least this radius. 0 = off.">Min inner radius (mm)</label><input id="rc" type="number" min="0" step="0.5"></div>
     </div>
     <div class="group">
       <h2>Requirements</h2>
@@ -324,6 +332,7 @@ ol.steps li { margin-bottom: 10px; }
         <li>Your setup is kept in this browser between visits. Use Save project to keep or share it as a file.</li>
         <li>The hand-off file (.json) carries the finished part: outline, holes, thickness, material, supports, loads, requirements and predicted results, in mm, N and MPa, for detailed checks in MechDe or any other tool.</li>
         <li>© 2026 Vignesh Nayak Ullal. All rights reserved. Use, copying or modification needs the author's written permission.</li>
+        <li>Outline import and the minimum inner radius work on the finished outline: material is never added outside an imported outline, so its own sharp corners stay as drawn. Imported parts are single-thickness 2D plates; surface features, ribs and 3D geometry are not read.</li>
         <li>Stress at sharp inner corners depends on the radius the cutter leaves. The numbers here assume rounding of about one finest-mesh element (0.7–0.9 mm); a sharper corner reads higher (in the benchmark, one design's peak rose 14% when the mesh was halved). Specify an inner corner radius of at least 1 mm when you clean the outline in CAD.</li>
         <li>Independent check: 24 finished designs re-solved with a separate solver (triangle mesh, quadratic elements, Morley plates). Deflection and buckling agreed within 5% on all 24; peak stress within 10% on 22 (the app's sizing stress carries a 10% allowance for this). No physical test yet: confirm critical parts by testing.</li>
         <li>Solver verified against the published 88-line topology code (identical compliance history), Timoshenko beam theory (tip deflection within 0.1%), simply supported plate buckling k = 4 (within 0.3%) and the Euler cantilever column (within 0.4%).</li>
@@ -356,6 +365,7 @@ self.onmessage = (m) => {
 </script>
 
 <script>
+/*GEOM*/
 /*APP*/
 </script>
 </body>
