@@ -1273,6 +1273,49 @@ function syncInputs() {
   $('setupSum').textContent = `${S.W} × ${S.H} mm · ${MATERIALS[S.mat].name} · FoS ${S.fos} · buckling ≥ ${S.bfs}`;
   renderFeats();
 }
+
+// ---------------- linkage pin forces ----------------
+function lkRows(res, names) {
+  const f1 = v => fmt(v, 1), rows = [];
+  for (const [id, p] of Object.entries(res.pins)) rows.push({ kind: 'Pin', id: names[id] || id, mag: p.mag, on: [[p.a, p.fa], [p.b, p.fa.map(v => -v)]].filter(x => x[0] !== 'ground') });
+  for (const [id, F] of Object.entries(res.links)) rows.push({ kind: 'Cylinder or link', id: names[id] || id, mag: Math.abs(F), note: F >= 0 ? 'pushing' : 'pulling', on: [] });
+  for (const [id, F] of Object.entries(res.ext)) rows.push({ kind: 'Reaction at tip', id: names[id] || id, mag: Math.abs(F), on: [] });
+  return rows;
+}
+function lkShow(res, names, head) {
+  const out = $('lkOut'); out.textContent = '';
+  if (!res.ok) { out.textContent = (res.problem || 'No solution.') + ` (${res.unknowns} unknowns, ${res.equations} equations, rank ${res.rank})`; return; }
+  const rows = lkRows(res, names), tbl = document.createElement('table'); tbl.style.cssText = 'width:100%;border-collapse:collapse;font-size:13px';
+  const hd = document.createElement('div'); hd.textContent = head; hd.style.margin = '4px 0'; out.appendChild(hd);
+  tbl.innerHTML = '<tr><th style="text-align:left">Item</th><th style="text-align:right">Force (kN)</th><th style="text-align:left;padding-left:10px">Use on a plate</th></tr>';
+  for (const r of rows) {
+    const tr = document.createElement('tr'); tr.style.borderTop = '1px solid var(--line)';
+    const c1 = document.createElement('td'); c1.textContent = `${r.kind}: ${r.id}${r.note ? ' (' + r.note + ')' : ''}`;
+    const c2 = document.createElement('td'); c2.style.textAlign = 'right'; c2.textContent = fmt(r.mag, 1);
+    const c3 = document.createElement('td'); c3.style.paddingLeft = '10px';
+    for (const [body, f] of r.on) { const b = document.createElement('button'); b.className = 'btn'; b.style.cssText = 'padding:2px 8px;margin-right:4px;font-size:12px'; b.textContent = `on ${names[body] || body}`;
+      b.title = `Set the load tool to ${fmt(Math.hypot(f[0], f[1]), 1)} kN at ${fmt(((Math.atan2(f[1], f[0]) * 180 / Math.PI) % 360 + 360) % 360, 0)}° (the force this pin puts on that member)`;
+      b.addEventListener('click', () => { const N = Math.hypot(f[0], f[1]) * (res.unitsKN === false ? 1 : 1000), ang = ((Math.atan2(f[1], f[0]) * 180 / Math.PI) % 360 + 360) % 360;
+        S.loadMag = Math.max(1, Math.round(N)); S.loadAng = Math.round(ang * 10) / 10; syncInputs(); $('linkDlg').close(); toast(`Load tool set to ${fmt(N / 1000, 1)} kN at ${fmt(S.loadAng, 0)}°. Pick the Load tool and click the pin position.`); }); c3.appendChild(b); }
+    tr.append(c1, c2, c3); tbl.appendChild(tr);
+  }
+  out.appendChild(tbl);
+}
+const LK_NAMES = { O: 'boom foot pin', K: 'stick-boom pin', T: 'bucket pin', R: 'idler pin', boomCyl: 'boom cylinders', stickCyl: 'stick cylinder', bucketCyl: 'bucket cylinder', link: 'bucket link', boom: 'boom', stick: 'stick', bucket: 'bucket', idler: 'idler', tip: 'tip force', hook: 'hook' };
+function lkSolveExcavator() {
+  try {
+    const d = Math.PI / 180, G = { ...Linkage.EXC, pressure: Math.max(1, +$('lkP').value || 34.3) * 1000 };
+    const mode = $('lkMode').value, c = Linkage.excavatorCase(+$('lkTh1').value * d, +$('lkThS').value * d, +$('lkThB').value * d, mode, Math.max(0, +$('lkLoad').value || 0), G);
+    if (c.result.ok && c.tip !== null) { c.result.ext.tip = c.tip; }
+    lkShow(c.result, LK_NAMES, ({ crowd: 'Arm crowd at relief', breakout: 'Bucket breakout at relief', lift: 'Lift at the bucket pin' })[mode] + (c.tip !== null && c.result.ok ? ` · tip force ${fmt(c.tip, 1)} kN` : '') + '. Pin forces are the force on the first-named member.');
+  } catch (e) { $('lkOut').textContent = String(e.message || e); }
+}
+$('linkBtn').addEventListener('click', () => { $('linkDlg').showModal(); lkSolveExcavator(); });
+$('lkClose').addEventListener('click', () => $('linkDlg').close());
+$('lkSolve').addEventListener('click', lkSolveExcavator);
+$('lkExample').addEventListener('click', () => { $('lkJson').value = JSON.stringify({ bodies: [{ id: 'beam', ext: [{ x: 1, y: 0, fx: 0, fy: -10 }] }], pins: [{ id: 'hinge', x: 0, y: 0, a: 'beam', b: 'ground' }], links: [{ id: 'rod', a: 'ground', p1: [2, -1], b: 'beam', p2: [2, 0] }] }, null, 1); });
+$('lkSolveJson').addEventListener('click', () => { try { const m = JSON.parse($('lkJson').value); const r = Linkage.solve(m); r.unitsKN = false; lkShow(r, {}, 'Your mechanism (units as entered; the load buttons treat the numbers as newtons)'); } catch (e) { $('lkOut').textContent = String(e.message || e); } });
+
 // ---------------- outline import ----------------
 const UNIT_MM = { mm: 1, cm: 10, in: 25.4, ft: 304.8, m: 1000, px: 25.4 / 96 };
 function importOutline(text, name) {

@@ -77,6 +77,13 @@ The benchmark also found and fixed a defect (closed outlines could collapse to t
 - **Min inner radius**: every re-entrant corner and every slot narrower than twice the radius in the final outline is closed to at least this radius (morphological closing on a grid 6x finer than the optimiser mesh). The mesh check, exports and area all use this finished geometry. Values below 1 mm are treated as 1 mm. The imported outline is a hard envelope: material is never added outside it, so its own sharp corners are kept as drawn.
 - Tests: `node tests/geom.js` (39 checks on the geometry layer) and `python3 tests/e2e_import.py` (import, envelope, radius via shapely, persistence).
 
+## Linkage pin forces (`src/linkage.js`)
+Setup, **Pin forces of a linkage**: planar rigid-body statics for pinned mechanisms. The built-in case is a 20 t excavator attachment (boom, stick, bucket with idler and link): arm crowd, bucket breakout, or a weight on the bucket pin, at any pose. The result lists the force at every pin, each cylinder and the tip reaction; **on <member>** sets the Load tool to that force and direction so it can be placed on a plate (a lug, bracket or pin boss) and optimised.
+- Own mechanism: JSON `{ bodies: [{id, weight?:{x,y,W}, ext?:[{x,y,fx,fy} or {id,x,y,dir:[dx,dy]}]}], pins: [{id,x,y,a,b}], links: [{id,a,p1,b,p2,force?}] }`. `ground` is a valid body name. A link is a two-force member (cylinder or rod); `force` fixes its push, otherwise it is solved. An `ext` with `dir` has a known direction and an unknown magnitude. Units are yours, consistent; y is up.
+- Statically indeterminate, mechanism and inconsistent set-ups are reported, never silently solved.
+- Limits: planar, quasi-static, rigid members, no friction in pins, no dynamics. It gives forces for sizing parts, not a motion simulation.
+- Tests: `node tests/linkage.js` (hand cases, whole-attachment equilibrium, and golden values from a separate Python implementation) and `python3 tests/e2e_linkage.py`.
+
 ## Why the mesh check matters
 
 On the cantilever template, the optimizer mesh under-reads the peak stress at member junctions by 10–25%. Without the check, design A reported FoS 4.22; on the mesh-checked outline it is 3.22. The check also catches outlines that lose a member when smoothed for cutting, and square re-entrant corners. On the L-bracket with a square keep-out corner, every design is rejected and the tool offers to round the corner; at R 12 mm the designs converge.
